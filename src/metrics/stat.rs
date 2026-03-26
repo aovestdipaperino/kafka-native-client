@@ -155,3 +155,95 @@ impl Stat for Rate {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_avg_single_value() {
+        let mut avg = Avg::new();
+        avg.record(42.0, 0);
+        assert!((avg.measure(0) - 42.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_avg_no_values_returns_zero() {
+        let avg = Avg::new();
+        assert!((avg.measure(0) - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_avg_multiple_values() {
+        let mut avg = Avg::new();
+        avg.record(10.0, 0);
+        avg.record(20.0, 0);
+        avg.record(30.0, 0);
+        assert!((avg.measure(0) - 20.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_count_increments() {
+        let mut count = Count::new();
+        assert!((count.measure(0) - 0.0).abs() < f64::EPSILON);
+        count.record(999.0, 0); // value is ignored
+        assert!((count.measure(0) - 1.0).abs() < f64::EPSILON);
+        count.record(0.0, 0);
+        assert!((count.measure(0) - 2.0).abs() < f64::EPSILON);
+        count.record(1.0, 0);
+        assert!((count.measure(0) - 3.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_max_with_decreasing_values_keeps_max() {
+        let mut max = Max::new();
+        max.record(100.0, 0);
+        max.record(50.0, 0);
+        max.record(25.0, 0);
+        assert!((max.measure(0) - 100.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_max_initial_is_neg_infinity() {
+        let max = Max::new();
+        assert!(max.measure(0).is_infinite());
+        assert!(max.measure(0) < 0.0);
+    }
+
+    #[test]
+    fn test_min_with_increasing_values_keeps_min() {
+        let mut min = Min::new();
+        min.record(10.0, 0);
+        min.record(20.0, 0);
+        min.record(30.0, 0);
+        assert!((min.measure(0) - 10.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_min_initial_is_pos_infinity() {
+        let min = Min::new();
+        assert!(min.measure(0).is_infinite());
+        assert!(min.measure(0) > 0.0);
+    }
+
+    #[test]
+    fn test_rate_with_time_progression() {
+        let mut rate = Rate::new();
+        // Record 10 events at t=1000ms
+        rate.record(10.0, 1000);
+        // Record 10 more events at t=3000ms (2 seconds later)
+        rate.record(10.0, 3000);
+        // Total: 20 events over 2 seconds = 10 per second
+        let measured = rate.measure(0);
+        assert!((measured - 10.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_rate_zero_elapsed_returns_zero() {
+        let mut rate = Rate::new();
+        rate.record(5.0, 1000);
+        // Only one measurement, so elapsed = 0
+        let measured = rate.measure(0);
+        assert!((measured - 0.0).abs() < f64::EPSILON);
+    }
+}

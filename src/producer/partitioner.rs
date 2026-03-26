@@ -174,4 +174,88 @@ mod tests {
             assert!(p >= 0 && p < 5, "partition {p} out of range for key {key}");
         }
     }
+
+    #[test]
+    fn test_murmur2_empty_bytes() {
+        // Empty input should produce a deterministic non-zero hash
+        // (seed is 0x9747b28c, XOR'd with length 0 gives the seed, then final mixing).
+        let h = murmur2(b"");
+        assert_eq!(h, murmur2(b""));
+        // The hash should be stable across calls
+        assert_ne!(
+            h, 0,
+            "empty input should not hash to zero due to seed mixing"
+        );
+    }
+
+    #[test]
+    fn test_murmur2_single_byte() {
+        let h = murmur2(b"a");
+        // Determinism
+        assert_eq!(h, murmur2(b"a"));
+        // Different from empty
+        assert_ne!(h, murmur2(b""));
+        // Different from other single bytes
+        assert_ne!(h, murmur2(b"b"));
+    }
+
+    #[test]
+    fn test_murmur2_determinism_across_many_calls() {
+        let expected = murmur2(b"consistent-key");
+        for _ in 0..1000 {
+            assert_eq!(murmur2(b"consistent-key"), expected);
+        }
+    }
+
+    #[test]
+    fn test_same_key_same_partition_regardless_of_call_count() {
+        let cluster = make_cluster("topic", 12);
+        let partitioner = DefaultPartitioner::new();
+
+        let first = partitioner.partition("topic", Some(b"stable-key"), None, &cluster);
+        for _ in 0..100 {
+            let p = partitioner.partition("topic", Some(b"stable-key"), None, &cluster);
+            assert_eq!(p, first, "keyed partition must be stable across calls");
+        }
+    }
+
+    #[test]
+    fn test_different_keys_distribute_across_partitions() {
+        let num_partitions = 10;
+        let cluster = make_cluster("topic", num_partitions);
+        let partitioner = DefaultPartitioner::new();
+
+        let mut counts = vec![0u32; num_partitions as usize];
+        for i in 0..1000 {
+            let key = format!("key-{i}");
+            let p = partitioner.partition("topic", Some(key.as_bytes()), None, &cluster);
+            assert!(p >= 0 && p < num_partitions);
+            counts[p as usize] += 1;
+        }
+
+        // With 1000 keys across 10 partitions, each partition should get at least some keys.
+        // A perfectly uniform distribution would give 100 each; we check that every
+        // partition gets at least 1 to confirm distribution is happening.
+        for (i, &count) in counts.iter().enumerate() {
+            assert!(
+                count > 0,
+                "partition {i} received 0 keys out of 1000 — distribution is broken"
+            );
+        }
+    }
+
+    #[test]
+    fn test_null_key_round_robin_produces_different_partitions_consecutively() {
+        let cluster = make_cluster("topic", 3);
+        let partitioner = DefaultPartitioner::new();
+
+        let p1 = partitioner.partition("topic", None, None, &cluster);
+        let p2 = partitioner.partition("topic", None, None, &cluster);
+        let p3 = partitioner.partition("topic", None, None, &cluster);
+
+        // Round robin should cycle; consecutive calls must differ
+        // (with 3 partitions, counter 0,1,2 mod 3 gives 0,1,2)
+        assert_ne!(p1, p2, "consecutive null-key partitions should differ");
+        assert_ne!(p2, p3, "consecutive null-key partitions should differ");
+    }
 }

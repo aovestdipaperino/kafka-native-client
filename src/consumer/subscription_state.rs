@@ -358,4 +358,164 @@ mod tests {
         state.set_position(&tp1, 0);
         assert!(state.has_all_fetch_positions());
     }
+
+    /// Subscribing again replaces the previous set of topics.
+    #[test]
+    fn test_subscribe_replaces_previous_topics() {
+        let state = SubscriptionState::new(OffsetResetStrategy::Latest);
+        state.subscribe(&["topic-a", "topic-b"]);
+        assert_eq!(state.subscribed_topics().len(), 2);
+
+        state.subscribe(&["topic-c"]);
+        let topics = state.subscribed_topics();
+        assert_eq!(topics.len(), 1);
+        assert!(topics.contains("topic-c"));
+        assert!(!topics.contains("topic-a"));
+    }
+
+    /// Assigning again replaces the previous partition set.
+    #[test]
+    fn test_assign_replaces_previous_partitions() {
+        let state = SubscriptionState::new(OffsetResetStrategy::Earliest);
+        let tp0 = TopicPartition::new("t", 0);
+        let tp1 = TopicPartition::new("t", 1);
+        let tp2 = TopicPartition::new("t", 2);
+
+        state.assign(&[tp0.clone(), tp1.clone()]);
+        assert_eq!(state.assigned_partitions().len(), 2);
+
+        state.assign(&[tp2.clone()]);
+        let assigned = state.assigned_partitions();
+        assert_eq!(assigned.len(), 1);
+        assert!(assigned.contains(&tp2));
+        assert!(!assigned.contains(&tp0));
+    }
+
+    /// Subscribe sets type to Topics; assign sets type to Manual.
+    /// They use different subscription types.
+    #[test]
+    fn test_subscribe_then_assign_changes_type() {
+        let state = SubscriptionState::new(OffsetResetStrategy::Latest);
+
+        state.subscribe(&["topic1"]);
+        assert_eq!(state.subscription_type(), SubscriptionType::Topics);
+
+        state.assign(&[TopicPartition::new("topic1", 0)]);
+        assert_eq!(state.subscription_type(), SubscriptionType::Manual);
+    }
+
+    /// Committed offset tracking: set and get committed offsets.
+    #[test]
+    fn test_committed_offset_tracking() {
+        let state = SubscriptionState::new(OffsetResetStrategy::Latest);
+        let tp = TopicPartition::new("test", 0);
+        state.assign(&[tp.clone()]);
+
+        // Initially no committed offset
+        assert!(state.committed(&tp).is_none());
+
+        let oam = OffsetAndMetadata {
+            offset: 50,
+            metadata: Some("test-metadata".into()),
+            leader_epoch: Some(1),
+        };
+        state.set_committed(&tp, oam.clone());
+
+        let committed = state.committed(&tp).unwrap();
+        assert_eq!(committed.offset, 50);
+        assert_eq!(committed.metadata.as_deref(), Some("test-metadata"));
+        assert_eq!(committed.leader_epoch, Some(1));
+    }
+
+    /// assign_from_group clears previous state and sets new partitions.
+    #[test]
+    fn test_assign_from_group_clears_previous_state() {
+        let state = SubscriptionState::new(OffsetResetStrategy::Earliest);
+        let tp0 = TopicPartition::new("t", 0);
+        let tp1 = TopicPartition::new("t", 1);
+        let tp2 = TopicPartition::new("t", 2);
+
+        // Set up initial assignment with positions
+        state.subscribe(&["t"]);
+        state.assign_from_group(&[tp0.clone(), tp1.clone()]);
+        state.set_position(&tp0, 100);
+        state.set_position(&tp1, 200);
+        assert!(state.has_all_fetch_positions());
+
+        // Re-assign from group with different partitions
+        state.assign_from_group(&[tp2.clone()]);
+        let assigned = state.assigned_partitions();
+        assert_eq!(assigned.len(), 1);
+        assert!(assigned.contains(&tp2));
+        assert!(!assigned.contains(&tp0));
+        assert!(!assigned.contains(&tp1));
+
+        // Old positions are gone
+        assert!(state.position(&tp0).is_none());
+        assert!(state.position(&tp1).is_none());
+        // New partition has no position yet
+        assert!(state.position(&tp2).is_none());
+        assert!(!state.has_all_fetch_positions());
+    }
+
+    /// Subscribe to multiple topics.
+    #[test]
+    fn test_multiple_topics_subscription() {
+        let state = SubscriptionState::new(OffsetResetStrategy::Latest);
+        state.subscribe(&["orders", "events", "metrics", "logs"]);
+        let topics = state.subscribed_topics();
+        assert_eq!(topics.len(), 4);
+        assert!(topics.contains("orders"));
+        assert!(topics.contains("events"));
+        assert!(topics.contains("metrics"));
+        assert!(topics.contains("logs"));
+    }
+
+    /// Position is None after assign until explicitly set.
+    #[test]
+    fn test_position_is_none_after_assign_until_set() {
+        let state = SubscriptionState::new(OffsetResetStrategy::Latest);
+        let tp0 = TopicPartition::new("t", 0);
+        let tp1 = TopicPartition::new("t", 1);
+        state.assign(&[tp0.clone(), tp1.clone()]);
+
+        assert!(state.position(&tp0).is_none());
+        assert!(state.position(&tp1).is_none());
+
+        state.set_position(&tp0, 10);
+        assert_eq!(state.position(&tp0), Some(10));
+        assert!(state.position(&tp1).is_none()); // still None
+    }
+
+    /// has_all_fetch_positions is false when no partitions are assigned.
+    #[test]
+    fn test_has_all_fetch_positions_false_when_empty() {
+        let state = SubscriptionState::new(OffsetResetStrategy::Latest);
+        // No partitions assigned — empty states map
+        assert!(!state.has_all_fetch_positions());
+    }
+
+    /// request_offset_reset clears position and sets reset strategy.
+    #[test]
+    fn test_request_offset_reset_clears_position() {
+        let state = SubscriptionState::new(OffsetResetStrategy::Latest);
+        let tp = TopicPartition::new("t", 0);
+        state.assign(&[tp.clone()]);
+        state.set_position(&tp, 42);
+        assert_eq!(state.position(&tp), Some(42));
+
+        state.request_offset_reset(&tp, OffsetResetStrategy::Earliest);
+        assert!(state.position(&tp).is_none());
+
+        let needing = state.partitions_needing_reset();
+        assert_eq!(needing[&tp], OffsetResetStrategy::Earliest);
+    }
+
+    /// Committed offset for an unassigned partition returns None.
+    #[test]
+    fn test_committed_for_unassigned_partition() {
+        let state = SubscriptionState::new(OffsetResetStrategy::Latest);
+        let tp = TopicPartition::new("unknown", 0);
+        assert!(state.committed(&tp).is_none());
+    }
 }

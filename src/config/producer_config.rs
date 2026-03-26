@@ -372,4 +372,178 @@ mod tests {
             .build();
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_all_builder_setters() {
+        let config = ProducerConfig::builder()
+            .bootstrap_servers(vec!["a:9092".into(), "b:9092".into()])
+            .client_id("my-producer")
+            .acks(Acks::One)
+            .batch_size(8192)
+            .linger_ms(10)
+            .buffer_memory(1_000_000)
+            .max_block_ms(5000)
+            .max_request_size(512_000)
+            .delivery_timeout_ms(60_000)
+            .request_timeout_ms(15_000)
+            .retries(3)
+            .retry_backoff_ms(200)
+            .max_in_flight_requests_per_connection(1)
+            .compression_type(CompressionType::Zstd)
+            .enable_idempotence(false)
+            .metadata_max_age_ms(60_000)
+            .build()
+            .unwrap();
+        assert_eq!(config.bootstrap_servers, vec!["a:9092", "b:9092"]);
+        assert_eq!(config.client_id, "my-producer");
+        assert_eq!(config.acks, Acks::One);
+        assert_eq!(config.batch_size, 8192);
+        assert_eq!(config.linger_ms, 10);
+        assert_eq!(config.buffer_memory, 1_000_000);
+        assert_eq!(config.max_block_ms, 5000);
+        assert_eq!(config.max_request_size, 512_000);
+        assert_eq!(config.delivery_timeout_ms, 60_000);
+        assert_eq!(config.request_timeout_ms, 15_000);
+        assert_eq!(config.retries, 3);
+        assert_eq!(config.retry_backoff_ms, 200);
+        assert_eq!(config.max_in_flight_requests_per_connection, 1);
+        assert_eq!(config.compression_type, CompressionType::Zstd);
+        assert!(!config.enable_idempotence);
+        assert_eq!(config.metadata_max_age_ms, 60_000);
+    }
+
+    #[test]
+    fn test_compression_type_to_proto_kafka() {
+        assert!(matches!(
+            CompressionType::None.to_proto_kafka(),
+            proto_kafka::records::Compression::None
+        ));
+        assert!(matches!(
+            CompressionType::Gzip.to_proto_kafka(),
+            proto_kafka::records::Compression::Gzip
+        ));
+        assert!(matches!(
+            CompressionType::Snappy.to_proto_kafka(),
+            proto_kafka::records::Compression::Snappy
+        ));
+        assert!(matches!(
+            CompressionType::Lz4.to_proto_kafka(),
+            proto_kafka::records::Compression::Lz4
+        ));
+        assert!(matches!(
+            CompressionType::Zstd.to_proto_kafka(),
+            proto_kafka::records::Compression::Zstd
+        ));
+    }
+
+    #[test]
+    fn test_compression_type_parse_all_valid() {
+        assert_eq!(
+            CompressionType::parse("none").unwrap(),
+            CompressionType::None
+        );
+        assert_eq!(
+            CompressionType::parse("gzip").unwrap(),
+            CompressionType::Gzip
+        );
+        assert_eq!(
+            CompressionType::parse("snappy").unwrap(),
+            CompressionType::Snappy
+        );
+        assert_eq!(CompressionType::parse("lz4").unwrap(), CompressionType::Lz4);
+        assert_eq!(
+            CompressionType::parse("zstd").unwrap(),
+            CompressionType::Zstd
+        );
+    }
+
+    #[test]
+    fn test_compression_type_parse_invalid() {
+        let result = CompressionType::parse("brotli");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid compression.type"));
+    }
+
+    #[test]
+    fn test_empty_bootstrap_servers_returns_error() {
+        let result = ProducerConfig::builder().bootstrap_servers(vec![]).build();
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("must not be empty"));
+    }
+
+    #[test]
+    fn test_hashmap_conversion_all_known_keys() {
+        let mut props = HashMap::new();
+        props.insert("bootstrap.servers".into(), "h1:9092,h2:9092".into());
+        props.insert("client.id".into(), "test-client".into());
+        props.insert("acks".into(), "all".into());
+        props.insert("batch.size".into(), "32768".into());
+        props.insert("linger.ms".into(), "10".into());
+        props.insert("buffer.memory".into(), "67108864".into());
+        props.insert("max.block.ms".into(), "120000".into());
+        props.insert("max.request.size".into(), "2097152".into());
+        props.insert("delivery.timeout.ms".into(), "240000".into());
+        props.insert("request.timeout.ms".into(), "60000".into());
+        props.insert("retries".into(), "5".into());
+        props.insert("retry.backoff.ms".into(), "500".into());
+        props.insert("max.in.flight.requests.per.connection".into(), "3".into());
+        props.insert("compression.type".into(), "lz4".into());
+        props.insert("enable.idempotence".into(), "false".into());
+        props.insert("metadata.max.age.ms".into(), "60000".into());
+        let config = ProducerConfig::try_from(props).unwrap();
+        assert_eq!(config.bootstrap_servers, vec!["h1:9092", "h2:9092"]);
+        assert_eq!(config.client_id, "test-client");
+        assert_eq!(config.acks, Acks::All);
+        assert_eq!(config.batch_size, 32768);
+        assert_eq!(config.linger_ms, 10);
+        assert_eq!(config.buffer_memory, 67_108_864);
+        assert_eq!(config.max_block_ms, 120_000);
+        assert_eq!(config.max_request_size, 2_097_152);
+        assert_eq!(config.delivery_timeout_ms, 240_000);
+        assert_eq!(config.request_timeout_ms, 60_000);
+        assert_eq!(config.retries, 5);
+        assert_eq!(config.retry_backoff_ms, 500);
+        assert_eq!(config.max_in_flight_requests_per_connection, 3);
+        assert_eq!(config.compression_type, CompressionType::Lz4);
+        assert!(!config.enable_idempotence);
+        assert_eq!(config.metadata_max_age_ms, 60_000);
+    }
+
+    #[test]
+    fn test_hashmap_with_unknown_keys_are_ignored() {
+        let mut props = HashMap::new();
+        props.insert("bootstrap.servers".into(), "localhost:9092".into());
+        props.insert("some.unknown.key".into(), "whatever".into());
+        props.insert("another.unknown".into(), "value".into());
+        let config = ProducerConfig::try_from(props).unwrap();
+        assert_eq!(config.bootstrap_servers, vec!["localhost:9092"]);
+        // Defaults should still apply for non-overridden fields
+        assert_eq!(config.acks, Acks::All);
+    }
+
+    #[test]
+    fn test_delivery_timeout_exactly_equal_to_request_plus_linger() {
+        // delivery_timeout_ms == request_timeout_ms + linger_ms should succeed
+        let config = ProducerConfig::builder()
+            .bootstrap_servers(vec!["localhost:9092".into()])
+            .delivery_timeout_ms(130)
+            .request_timeout_ms(100)
+            .linger_ms(30)
+            .build();
+        assert!(config.is_ok());
+        let c = config.unwrap();
+        assert_eq!(c.delivery_timeout_ms, 130);
+        assert_eq!(c.request_timeout_ms, 100);
+        assert_eq!(c.linger_ms, 30);
+    }
+
+    #[test]
+    fn test_default_enable_idempotence_is_true() {
+        let config = ProducerConfig::builder()
+            .bootstrap_servers(vec!["localhost:9092".into()])
+            .build()
+            .unwrap();
+        assert!(config.enable_idempotence);
+    }
 }

@@ -145,4 +145,47 @@ mod tests {
         assert_eq!(config.request_timeout_ms, 5000);
         assert_eq!(config.bootstrap_servers, vec!["host1:9092"]);
     }
+
+    #[test]
+    fn test_all_defaults() {
+        let config = AdminConfig::builder()
+            .bootstrap_servers(vec!["localhost:9092".into()])
+            .build()
+            .unwrap();
+        assert_eq!(config.client_id, "");
+        assert_eq!(config.request_timeout_ms, 30_000);
+        assert_eq!(config.metadata_max_age_ms, 300_000);
+        assert_eq!(config.bootstrap_servers, vec!["localhost:9092"]);
+    }
+
+    #[test]
+    fn test_hashmap_conversion_all_known_keys() {
+        let mut props = HashMap::new();
+        props.insert("bootstrap.servers".into(), "h1:9092,h2:9092".into());
+        props.insert("client.id".into(), "admin-client".into());
+        props.insert("request.timeout.ms".into(), "10000".into());
+        props.insert("metadata.max.age.ms".into(), "60000".into());
+        let config = AdminConfig::try_from(props).unwrap();
+        assert_eq!(config.bootstrap_servers, vec!["h1:9092", "h2:9092"]);
+        assert_eq!(config.client_id, "admin-client");
+        assert_eq!(config.request_timeout_ms, 10_000);
+        assert_eq!(config.metadata_max_age_ms, 60_000);
+    }
+
+    #[test]
+    fn test_hashmap_unknown_keys_ignored() {
+        let mut props = HashMap::new();
+        props.insert("bootstrap.servers".into(), "localhost:9092".into());
+        props.insert("foo.bar.baz".into(), "whatever".into());
+        let config = AdminConfig::try_from(props).unwrap();
+        assert_eq!(config.bootstrap_servers, vec!["localhost:9092"]);
+        // Defaults are preserved
+        assert_eq!(config.request_timeout_ms, 30_000);
+    }
+
+    #[test]
+    fn test_empty_bootstrap_servers_error() {
+        let result = AdminConfig::builder().bootstrap_servers(vec![]).build();
+        assert!(result.is_err());
+    }
 }

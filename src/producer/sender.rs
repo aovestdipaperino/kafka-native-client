@@ -368,4 +368,53 @@ mod tests {
         // If it encodes without error, the idempotent fields were applied
         assert!(request.topic_data[0].partition_data[0].records.is_some());
     }
+
+    #[test]
+    fn test_build_produce_request_empty_batch_list() {
+        let request = build_produce_request(&[], -1, 30000, Compression::None).unwrap();
+        assert_eq!(request.acks, -1);
+        assert_eq!(request.timeout_ms, 30000);
+        assert!(request.topic_data.is_empty());
+    }
+
+    #[test]
+    fn test_build_produce_request_groups_multiple_partitions_of_same_topic() {
+        let batch_p0 = make_batch(
+            TopicPartition::new("my-topic", 0),
+            vec![test_record("k0", "v0")],
+        );
+        let batch_p1 = make_batch(
+            TopicPartition::new("my-topic", 1),
+            vec![test_record("k1", "v1")],
+        );
+        let batch_p2 = make_batch(
+            TopicPartition::new("my-topic", 2),
+            vec![test_record("k2", "v2")],
+        );
+
+        let request =
+            build_produce_request(&[batch_p0, batch_p1, batch_p2], 1, 5000, Compression::None)
+                .unwrap();
+
+        // All three partitions belong to the same topic, so there should be 1 topic entry
+        assert_eq!(request.topic_data.len(), 1);
+        assert_eq!(request.topic_data[0].name.0.as_str(), "my-topic");
+
+        // With 3 partitions under one topic
+        assert_eq!(request.topic_data[0].partition_data.len(), 3);
+
+        // Verify partition indices are present (order may vary)
+        let mut partition_indices: Vec<i32> = request.topic_data[0]
+            .partition_data
+            .iter()
+            .map(|p| p.index)
+            .collect();
+        partition_indices.sort();
+        assert_eq!(partition_indices, vec![0, 1, 2]);
+
+        // Each partition should have record data
+        for pd in &request.topic_data[0].partition_data {
+            assert!(pd.records.is_some());
+        }
+    }
 }

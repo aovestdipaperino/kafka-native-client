@@ -116,4 +116,57 @@ mod tests {
         assert_eq!(mgr.producer_id(), -1);
         assert_eq!(mgr.producer_epoch(), -1);
     }
+
+    #[test]
+    fn test_sequences_are_independent_per_partition() {
+        let cm = Arc::new(ConnectionManager::new(vec![], String::new(), 5));
+        let mgr = ProducerIdManager::new(cm);
+        let tp_a = TopicPartition::new("topic-a", 0);
+        let tp_b = TopicPartition::new("topic-b", 0);
+        let tp_a1 = TopicPartition::new("topic-a", 1);
+
+        // Each partition starts at 0 independently
+        assert_eq!(mgr.next_sequence(&tp_a, 10), 0);
+        assert_eq!(mgr.next_sequence(&tp_b, 5), 0);
+        assert_eq!(mgr.next_sequence(&tp_a1, 3), 0);
+
+        // Each partition advances independently
+        assert_eq!(mgr.next_sequence(&tp_a, 2), 10);
+        assert_eq!(mgr.next_sequence(&tp_b, 1), 5);
+        assert_eq!(mgr.next_sequence(&tp_a1, 1), 3);
+    }
+
+    #[test]
+    fn test_reset_only_affects_target_partition() {
+        let cm = Arc::new(ConnectionManager::new(vec![], String::new(), 5));
+        let mgr = ProducerIdManager::new(cm);
+        let tp0 = TopicPartition::new("test", 0);
+        let tp1 = TopicPartition::new("test", 1);
+
+        mgr.next_sequence(&tp0, 10);
+        mgr.next_sequence(&tp1, 20);
+
+        // Reset only tp0
+        mgr.reset_sequence(&tp0);
+
+        // tp0 should restart from 0, tp1 should be unaffected
+        assert_eq!(mgr.next_sequence(&tp0, 1), 0);
+        assert_eq!(mgr.next_sequence(&tp1, 1), 20);
+    }
+
+    #[test]
+    fn test_next_sequence_returns_0_for_new_partition() {
+        let cm = Arc::new(ConnectionManager::new(vec![], String::new(), 5));
+        let mgr = ProducerIdManager::new(cm);
+
+        // Every brand-new partition should start at sequence 0
+        for i in 0..10 {
+            let tp = TopicPartition::new("test", i);
+            assert_eq!(
+                mgr.next_sequence(&tp, 1),
+                0,
+                "new partition {i} should start at sequence 0"
+            );
+        }
+    }
 }

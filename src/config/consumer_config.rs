@@ -339,4 +339,163 @@ mod tests {
         assert_eq!(config.auto_offset_reset, OffsetResetStrategy::Earliest);
         assert_eq!(config.group_id, Some("my-group".into()));
     }
+
+    #[test]
+    fn test_all_builder_setters() {
+        let config = ConsumerConfig::builder()
+            .bootstrap_servers(vec!["a:9092".into(), "b:9092".into()])
+            .group_id("my-group")
+            .group_instance_id("instance-1")
+            .client_id("my-consumer")
+            .auto_offset_reset(OffsetResetStrategy::Earliest)
+            .enable_auto_commit(true)
+            .auto_commit_interval_ms(10_000)
+            .fetch_min_bytes(512)
+            .fetch_max_bytes(10_000_000)
+            .fetch_max_wait_ms(1000)
+            .max_poll_records(100)
+            .max_partition_fetch_bytes(512_000)
+            .session_timeout_ms(30_000)
+            .heartbeat_interval_ms(5_000)
+            .request_timeout_ms(20_000)
+            .metadata_max_age_ms(60_000)
+            .build()
+            .unwrap();
+        assert_eq!(config.bootstrap_servers, vec!["a:9092", "b:9092"]);
+        assert_eq!(config.group_id, Some("my-group".into()));
+        assert_eq!(config.group_instance_id, Some("instance-1".into()));
+        assert_eq!(config.client_id, "my-consumer");
+        assert_eq!(config.auto_offset_reset, OffsetResetStrategy::Earliest);
+        assert!(config.enable_auto_commit);
+        assert_eq!(config.auto_commit_interval_ms, 10_000);
+        assert_eq!(config.fetch_min_bytes, 512);
+        assert_eq!(config.fetch_max_bytes, 10_000_000);
+        assert_eq!(config.fetch_max_wait_ms, 1000);
+        assert_eq!(config.max_poll_records, 100);
+        assert_eq!(config.max_partition_fetch_bytes, 512_000);
+        assert_eq!(config.session_timeout_ms, 30_000);
+        assert_eq!(config.heartbeat_interval_ms, 5_000);
+        assert_eq!(config.request_timeout_ms, 20_000);
+        assert_eq!(config.metadata_max_age_ms, 60_000);
+    }
+
+    #[test]
+    fn test_offset_reset_strategy_parse_all_variants() {
+        assert_eq!(
+            OffsetResetStrategy::parse("latest").unwrap(),
+            OffsetResetStrategy::Latest
+        );
+        assert_eq!(
+            OffsetResetStrategy::parse("earliest").unwrap(),
+            OffsetResetStrategy::Earliest
+        );
+        assert_eq!(
+            OffsetResetStrategy::parse("none").unwrap(),
+            OffsetResetStrategy::None
+        );
+    }
+
+    #[test]
+    fn test_offset_reset_strategy_parse_invalid() {
+        let result = OffsetResetStrategy::parse("beginning");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid auto.offset.reset"));
+    }
+
+    #[test]
+    fn test_default_auto_offset_reset_is_latest() {
+        let config = ConsumerConfig::builder()
+            .bootstrap_servers(vec!["localhost:9092".into()])
+            .group_id("g")
+            .build()
+            .unwrap();
+        assert_eq!(config.auto_offset_reset, OffsetResetStrategy::Latest);
+    }
+
+    #[test]
+    fn test_default_enable_auto_commit_is_true() {
+        let config = ConsumerConfig::builder()
+            .bootstrap_servers(vec!["localhost:9092".into()])
+            .group_id("g")
+            .build()
+            .unwrap();
+        assert!(config.enable_auto_commit);
+    }
+
+    #[test]
+    fn test_hashmap_conversion_all_known_keys() {
+        let mut props = HashMap::new();
+        props.insert("bootstrap.servers".into(), "h1:9092,h2:9092".into());
+        props.insert("group.id".into(), "test-group".into());
+        props.insert("group.instance.id".into(), "inst-1".into());
+        props.insert("client.id".into(), "test-client".into());
+        props.insert("auto.offset.reset".into(), "none".into());
+        props.insert("enable.auto.commit".into(), "false".into());
+        props.insert("auto.commit.interval.ms".into(), "10000".into());
+        props.insert("fetch.min.bytes".into(), "256".into());
+        props.insert("fetch.max.bytes".into(), "1000000".into());
+        props.insert("fetch.max.wait.ms".into(), "250".into());
+        props.insert("max.poll.records".into(), "50".into());
+        props.insert("max.partition.fetch.bytes".into(), "524288".into());
+        props.insert("session.timeout.ms".into(), "20000".into());
+        props.insert("heartbeat.interval.ms".into(), "2000".into());
+        props.insert("request.timeout.ms".into(), "15000".into());
+        props.insert("metadata.max.age.ms".into(), "120000".into());
+        let config = ConsumerConfig::try_from(props).unwrap();
+        assert_eq!(config.bootstrap_servers, vec!["h1:9092", "h2:9092"]);
+        assert_eq!(config.group_id, Some("test-group".into()));
+        assert_eq!(config.group_instance_id, Some("inst-1".into()));
+        assert_eq!(config.client_id, "test-client");
+        assert_eq!(config.auto_offset_reset, OffsetResetStrategy::None);
+        assert!(!config.enable_auto_commit);
+        assert_eq!(config.auto_commit_interval_ms, 10_000);
+        assert_eq!(config.fetch_min_bytes, 256);
+        assert_eq!(config.fetch_max_bytes, 1_000_000);
+        assert_eq!(config.fetch_max_wait_ms, 250);
+        assert_eq!(config.max_poll_records, 50);
+        assert_eq!(config.max_partition_fetch_bytes, 524_288);
+        assert_eq!(config.session_timeout_ms, 20_000);
+        assert_eq!(config.heartbeat_interval_ms, 2_000);
+        assert_eq!(config.request_timeout_ms, 15_000);
+        assert_eq!(config.metadata_max_age_ms, 120_000);
+    }
+
+    #[test]
+    fn test_missing_group_id_is_allowed_when_auto_commit_disabled() {
+        let config = ConsumerConfig::builder()
+            .bootstrap_servers(vec!["localhost:9092".into()])
+            .enable_auto_commit(false)
+            .build()
+            .unwrap();
+        assert!(config.group_id.is_none());
+    }
+
+    #[test]
+    fn test_auto_commit_requires_group_id_validation() {
+        // Default enable_auto_commit is true, so missing group_id should fail
+        let result = ConsumerConfig::builder()
+            .bootstrap_servers(vec!["localhost:9092".into()])
+            .build();
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("group.id"));
+
+        // Explicitly true with no group_id also fails
+        let result2 = ConsumerConfig::builder()
+            .bootstrap_servers(vec!["localhost:9092".into()])
+            .enable_auto_commit(true)
+            .build();
+        assert!(result2.is_err());
+    }
+
+    #[test]
+    fn test_session_timeout_and_heartbeat_defaults() {
+        let config = ConsumerConfig::builder()
+            .bootstrap_servers(vec!["localhost:9092".into()])
+            .group_id("g")
+            .build()
+            .unwrap();
+        assert_eq!(config.session_timeout_ms, 45_000);
+        assert_eq!(config.heartbeat_interval_ms, 3_000);
+    }
 }

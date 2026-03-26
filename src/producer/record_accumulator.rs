@@ -435,4 +435,183 @@ mod tests {
         let result = f1.await;
         assert!(result.is_err());
     }
+
+    #[tokio::test]
+    async fn test_separate_partitions_get_separate_batches() {
+        let acc = RecordAccumulator::new(16384, Compression::None, 5000, 1024 * 1024, 60000);
+        let tp0 = TopicPartition::new("test", 0);
+        let tp1 = TopicPartition::new("test", 1);
+
+        acc.append(tp0.clone(), ProducerRecord::new("test", "a"), None)
+            .await
+            .unwrap();
+        acc.append(tp1.clone(), ProducerRecord::new("test", "b"), None)
+            .await
+            .unwrap();
+
+        let batches = acc.batches.lock().unwrap();
+        assert!(batches.contains_key(&tp0));
+        assert!(batches.contains_key(&tp1));
+        assert_eq!(batches.get(&tp0).unwrap().record_count, 1);
+        assert_eq!(batches.get(&tp1).unwrap().record_count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_append_two_partitions_drain_gets_both() {
+        // Use linger_ms=0 so batches are immediately ready
+        let acc = RecordAccumulator::new(16384, Compression::None, 0, 1024 * 1024, 60000);
+        let tp0 = TopicPartition::new("test", 0);
+        let tp1 = TopicPartition::new("test", 1);
+        let cluster = test_cluster();
+
+        acc.append(tp0.clone(), ProducerRecord::new("test", "v0"), None)
+            .await
+            .unwrap();
+        acc.append(tp1.clone(), ProducerRecord::new("test", "v1"), None)
+            .await
+            .unwrap();
+
+        let ready = acc.ready(&cluster);
+        let drained = acc.drain(&ready, &cluster);
+
+        // Both partitions should be drained (both map to broker 0)
+        let all_batches: Vec<&ProducerBatch> = drained.values().flatten().collect();
+        assert_eq!(all_batches.len(), 2);
+
+        let topics_partitions: HashSet<(String, i32)> = all_batches
+            .iter()
+            .map(|b| (b.tp.topic.clone(), b.tp.partition))
+            .collect();
+        assert!(topics_partitions.contains(&("test".into(), 0)));
+        assert!(topics_partitions.contains(&("test".into(), 1)));
+        assert!(!acc.has_unsent());
+    }
+
+    #[tokio::test]
+    async fn test_drain_only_returns_ready_batches() {
+        // Large batch_size and long linger — nothing should be ready
+        let acc = RecordAccumulator::new(
+            1024 * 1024, // huge batch size
+            Compression::None,
+            60000, // very long linger
+            1024 * 1024,
+            60000,
+        );
+        let tp = TopicPartition::new("test", 0);
+        let cluster = test_cluster();
+
+        acc.append(tp.clone(), ProducerRecord::new("test", "small"), None)
+            .await
+            .unwrap();
+
+        let ready = acc.ready(&cluster);
+        // Should be empty since batch is under batch_size and linger hasn't expired
+        assert!(ready.is_empty());
+
+        let drained = acc.drain(&ready, &cluster);
+        assert!(drained.is_empty());
+        // Batch should still be in the accumulator
+        assert!(acc.has_unsent());
+    }
+
+    #[tokio::test]
+    async fn test_notify_triggered_on_append() {
+        let acc = Arc::new(RecordAccumulator::new(
+            16384,
+            Compression::None,
+            5000,
+            1024 * 1024,
+            60000,
+        ));
+        let tp = TopicPartition::new("test", 0);
+        let notify = acc.notify.clone();
+
+        // Set up a listener before appending
+        let handle = tokio::spawn({
+            let notify = notify.clone();
+            async move {
+                // This should complete once append notifies
+                notify.notified().await;
+                true
+            }
+        });
+
+        // Small delay to ensure the notified() future is registered
+        tokio::task::yield_now().await;
+
+        acc.append(tp, ProducerRecord::new("test", "wakeup"), None)
+            .await
+            .unwrap();
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), handle)
+            .await
+            .expect("notification timed out")
+            .expect("task panicked");
+        assert!(result);
+    }
+
+    #[tokio::test]
+    async fn test_buffer_memory_released_after_complete_all() {
+        // Buffer of 10 bytes
+        let acc = Arc::new(RecordAccumulator::new(
+            10, // small batch size so batches are immediately ready
+            Compression::None,
+            0,
+            10, // 10 bytes total buffer
+            5000,
+        ));
+        let tp = TopicPartition::new("test", 0);
+        let cluster = test_cluster();
+
+        // Append 5 bytes — should succeed
+        acc.append(tp.clone(), ProducerRecord::new("test", "hello"), None)
+            .await
+            .unwrap();
+
+        // Drain and complete the batch, which releases permits
+        let ready = acc.ready(&cluster);
+        let drained = acc.drain(&ready, &cluster);
+        for batch in drained.into_values().flatten() {
+            batch.complete_all(0, 1000);
+        }
+
+        // Now we should be able to append again since memory was released
+        let result = acc
+            .append(tp.clone(), ProducerRecord::new("test", "world"), None)
+            .await;
+        assert!(
+            result.is_ok(),
+            "should succeed after memory released by complete_all"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_buffer_memory_released_after_fail_all() {
+        // Buffer of 10 bytes
+        let acc = Arc::new(RecordAccumulator::new(10, Compression::None, 0, 10, 5000));
+        let tp = TopicPartition::new("test", 0);
+        let cluster = test_cluster();
+
+        // Append 5 bytes
+        let _f = acc
+            .append(tp.clone(), ProducerRecord::new("test", "hello"), None)
+            .await
+            .unwrap();
+
+        // Drain and fail the batch — permits should still be released
+        let ready = acc.ready(&cluster);
+        let drained = acc.drain(&ready, &cluster);
+        for batch in drained.into_values().flatten() {
+            batch.fail_all(|| KafkaError::Timeout);
+        }
+
+        // Memory should be freed, allowing another append
+        let result = acc
+            .append(tp.clone(), ProducerRecord::new("test", "world"), None)
+            .await;
+        assert!(
+            result.is_ok(),
+            "should succeed after memory released by fail_all"
+        );
+    }
 }

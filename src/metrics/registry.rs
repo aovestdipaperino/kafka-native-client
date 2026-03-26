@@ -100,4 +100,41 @@ mod tests {
         let metrics = registry.metrics();
         assert_eq!(metrics.len(), 2);
     }
+
+    #[test]
+    fn test_sensor_returns_same_arc_for_same_name() {
+        let registry = MetricsRegistry::new();
+        let s1 = registry.sensor("shared");
+        let s2 = registry.sensor("shared");
+        // Both Arcs should point to the same Sensor allocation
+        assert!(Arc::ptr_eq(&s1, &s2));
+    }
+
+    #[test]
+    fn test_different_names_return_different_sensors() {
+        let registry = MetricsRegistry::new();
+        let s1 = registry.sensor("alpha");
+        let s2 = registry.sensor("beta");
+        assert!(!Arc::ptr_eq(&s1, &s2));
+        assert_eq!(s1.name, "alpha");
+        assert_eq!(s2.name, "beta");
+    }
+
+    #[test]
+    fn test_sensor_same_arc_shares_metrics() {
+        let registry = MetricsRegistry::new();
+        let s1 = registry.sensor("shared");
+        s1.add("g", "m", &[], Box::new(Avg::new()));
+
+        // Getting the same sensor again should see the metric we added
+        let s2 = registry.sensor("shared");
+        assert_eq!(s2.metrics.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_registry_metrics_empty() {
+        let registry = MetricsRegistry::new();
+        let metrics = registry.metrics();
+        assert!(metrics.is_empty());
+    }
 }

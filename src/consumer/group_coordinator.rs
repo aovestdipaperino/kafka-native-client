@@ -592,4 +592,176 @@ mod tests {
         assert_eq!(gc.member_id(), "");
         assert_eq!(gc.group_id(), "test-group");
     }
+
+    /// Encode assignment with a single partition and decode it back.
+    #[test]
+    fn test_encode_assignment_single_partition() {
+        let partitions = vec![TopicPartition::new("my-topic", 0)];
+        let encoded = encode_assignment(&partitions);
+        let decoded = decode_assignment(&encoded);
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0], TopicPartition::new("my-topic", 0));
+    }
+
+    /// Encode assignment with an empty partition list.
+    #[test]
+    fn test_encode_assignment_empty_list() {
+        let partitions: Vec<TopicPartition> = vec![];
+        let encoded = encode_assignment(&partitions);
+        let decoded = decode_assignment(&encoded);
+        assert!(decoded.is_empty());
+
+        // The encoded format should still be valid: version(2) + count(4)=0 + userdata(4)
+        assert_eq!(encoded.len(), 2 + 4 + 4);
+    }
+
+    /// Decode assignment with truncated data returns empty (robustness).
+    #[test]
+    fn test_decode_assignment_truncated_data() {
+        // Less than 6 bytes: should return empty
+        let data = Bytes::from_static(&[0, 0, 0]);
+        assert!(decode_assignment(&data).is_empty());
+
+        // Exactly 5 bytes: still too short
+        let data = Bytes::from_static(&[0, 0, 0, 0, 1]);
+        assert!(decode_assignment(&data).is_empty());
+    }
+
+    /// Decode assignment with header claiming topics but truncated mid-topic.
+    #[test]
+    fn test_decode_assignment_truncated_mid_topic() {
+        // version=0, num_topics=1, then truncated before topic length can be read
+        let mut buf = BytesMut::new();
+        buf.put_i16(0); // version
+        buf.put_i32(1); // 1 topic
+        // No topic data follows — truncated
+        let data = buf.freeze();
+        let decoded = decode_assignment(&data);
+        assert!(decoded.is_empty());
+    }
+
+    /// Decode assignment with header claiming topics but topic length exceeds data.
+    #[test]
+    fn test_decode_assignment_truncated_topic_name() {
+        let mut buf = BytesMut::new();
+        buf.put_i16(0); // version
+        buf.put_i32(1); // 1 topic
+        buf.put_i16(100); // topic name length = 100 but no data follows
+        let data = buf.freeze();
+        let decoded = decode_assignment(&data);
+        assert!(decoded.is_empty());
+    }
+
+    /// Decode assignment truncated mid-partition-count.
+    #[test]
+    fn test_decode_assignment_truncated_partition_count() {
+        let mut buf = BytesMut::new();
+        buf.put_i16(0); // version
+        buf.put_i32(1); // 1 topic
+        buf.put_i16(1); // topic name length = 1
+        buf.put_u8(b't'); // topic name "t"
+        // Missing the 4-byte partition count
+        let data = buf.freeze();
+        let decoded = decode_assignment(&data);
+        assert!(decoded.is_empty());
+    }
+
+    /// Decode assignment truncated mid-partition-data.
+    #[test]
+    fn test_decode_assignment_truncated_partition_data() {
+        let mut buf = BytesMut::new();
+        buf.put_i16(0); // version
+        buf.put_i32(1); // 1 topic
+        buf.put_i16(1); // topic name length = 1
+        buf.put_u8(b't'); // topic name "t"
+        buf.put_i32(2); // claims 2 partitions
+        buf.put_i32(0); // partition 0
+        // Missing partition 1 data — truncated
+        let data = buf.freeze();
+        let decoded = decode_assignment(&data);
+        // Should get the one partition it could fully read
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0], TopicPartition::new("t", 0));
+    }
+
+    /// Roundtrip with many partitions across 3 topics.
+    #[test]
+    fn test_roundtrip_many_partitions_three_topics() {
+        let mut partitions = Vec::new();
+        for p in 0..5 {
+            partitions.push(TopicPartition::new("alpha", p));
+        }
+        for p in 0..3 {
+            partitions.push(TopicPartition::new("beta", p));
+        }
+        for p in 0..4 {
+            partitions.push(TopicPartition::new("gamma", p));
+        }
+        assert_eq!(partitions.len(), 12);
+
+        let encoded = encode_assignment(&partitions);
+        let decoded = decode_assignment(&encoded);
+
+        assert_eq!(decoded.len(), 12);
+
+        // Verify all original partitions are present in decoded
+        for tp in &partitions {
+            assert!(
+                decoded.contains(tp),
+                "Missing partition after roundtrip: {tp}"
+            );
+        }
+    }
+
+    /// Roundtrip preserves topic names with special characters.
+    #[test]
+    fn test_roundtrip_special_topic_names() {
+        let partitions = vec![
+            TopicPartition::new("topic.with.dots", 0),
+            TopicPartition::new("topic-with-dashes", 1),
+            TopicPartition::new("topic_with_underscores", 2),
+        ];
+
+        let encoded = encode_assignment(&partitions);
+        let decoded = decode_assignment(&encoded);
+
+        assert_eq!(decoded.len(), 3);
+        assert!(decoded.contains(&TopicPartition::new("topic.with.dots", 0)));
+        assert!(decoded.contains(&TopicPartition::new("topic-with-dashes", 1)));
+        assert!(decoded.contains(&TopicPartition::new("topic_with_underscores", 2)));
+    }
+
+    /// Subscription metadata encoding produces a non-empty byte buffer.
+    #[test]
+    fn test_encode_subscription_metadata_structure() {
+        let topics = vec!["a".to_string()];
+        let encoded = encode_subscription_metadata(&topics);
+        // version(2) + count(4) + topic_len(2) + "a"(1) + user_data(4) = 13
+        assert_eq!(encoded.len(), 13);
+
+        // Check version = 0
+        assert_eq!(encoded[0], 0);
+        assert_eq!(encoded[1], 0);
+        // Check topic count = 1
+        assert_eq!(
+            i32::from_be_bytes([encoded[2], encoded[3], encoded[4], encoded[5]]),
+            1
+        );
+    }
+
+    /// Subscription metadata with multiple topics.
+    #[test]
+    fn test_encode_subscription_metadata_multiple_topics() {
+        let topics = vec!["topicA".to_string(), "topicB".to_string()];
+        let encoded = encode_subscription_metadata(&topics);
+        // version(2) + count(4) + 2*(len(2)+name) + userdata(4)
+        // = 2 + 4 + (2+6) + (2+6) + 4 = 26
+        assert_eq!(encoded.len(), 26);
+
+        // Check topic count = 2
+        assert_eq!(
+            i32::from_be_bytes([encoded[2], encoded[3], encoded[4], encoded[5]]),
+            2
+        );
+    }
 }
