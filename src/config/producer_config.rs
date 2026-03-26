@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use crate::{KafkaError, Result};
 use super::common_config::{Acks, CommonConfig};
+use crate::{KafkaError, Result};
 
 /// Compression type for produced records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,12 +177,14 @@ impl ProducerConfigBuilder {
     }
 
     pub fn build(self) -> Result<ProducerConfig> {
-        let bootstrap_servers = self.bootstrap_servers.ok_or_else(|| {
-            KafkaError::Config("bootstrap.servers is required".into())
-        })?;
+        let bootstrap_servers = self
+            .bootstrap_servers
+            .ok_or_else(|| KafkaError::Config("bootstrap.servers is required".into()))?;
 
         if bootstrap_servers.is_empty() {
-            return Err(KafkaError::Config("bootstrap.servers must not be empty".into()));
+            return Err(KafkaError::Config(
+                "bootstrap.servers must not be empty".into(),
+            ));
         }
 
         let linger_ms = self.linger_ms.unwrap_or(5);
@@ -235,8 +237,7 @@ impl TryFrom<HashMap<String, String>> for ProducerConfig {
                     builder = builder.client_id(value.clone());
                 }
                 "acks" => {
-                    let acks = Acks::parse(value)
-                        .map_err(|e| KafkaError::Config(e))?;
+                    let acks = Acks::parse(value).map_err(KafkaError::Config)?;
                     builder = builder.acks(acks);
                 }
                 "batch.size" => {
@@ -302,8 +303,7 @@ impl TryFrom<HashMap<String, String>> for ProducerConfig {
                     builder = builder.max_in_flight_requests_per_connection(v);
                 }
                 "compression.type" => {
-                    let ct = CompressionType::parse(value)
-                        .map_err(|e| KafkaError::Config(e))?;
+                    let ct = CompressionType::parse(value).map_err(KafkaError::Config)?;
                     builder = builder.compression_type(ct);
                 }
                 "enable.idempotence" => {

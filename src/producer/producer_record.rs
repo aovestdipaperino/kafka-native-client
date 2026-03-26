@@ -1,5 +1,5 @@
-use bytes::Bytes;
 use crate::common::RecordHeader;
+use bytes::Bytes;
 
 /// A record to be sent to Kafka.
 pub struct ProducerRecord {
@@ -23,9 +23,18 @@ impl ProducerRecord {
         }
     }
 
-    pub fn with_key(mut self, key: impl Into<Bytes>) -> Self { self.key = Some(key.into()); self }
-    pub fn with_partition(mut self, partition: i32) -> Self { self.partition = Some(partition); self }
-    pub fn with_timestamp(mut self, ts: i64) -> Self { self.timestamp = Some(ts); self }
+    pub fn with_key(mut self, key: impl Into<Bytes>) -> Self {
+        self.key = Some(key.into());
+        self
+    }
+    pub fn with_partition(mut self, partition: i32) -> Self {
+        self.partition = Some(partition);
+        self
+    }
+    pub fn with_timestamp(mut self, ts: i64) -> Self {
+        self.timestamp = Some(ts);
+        self
+    }
     pub fn with_header(mut self, key: impl Into<String>, value: impl Into<Bytes>) -> Self {
         self.headers.push(RecordHeader::new(key, value));
         self
@@ -34,7 +43,11 @@ impl ProducerRecord {
     pub fn estimated_size(&self) -> usize {
         self.key.as_ref().map(|k| k.len()).unwrap_or(0)
             + self.value.as_ref().map(|v| v.len()).unwrap_or(0)
-            + self.headers.iter().map(|h| h.key.len() + h.value.as_ref().map(|v| v.len()).unwrap_or(0)).sum::<usize>()
+            + self
+                .headers
+                .iter()
+                .map(|h| h.key.len() + h.value.as_ref().map(|v| v.len()).unwrap_or(0))
+                .sum::<usize>()
     }
 }
 

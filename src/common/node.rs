@@ -9,7 +9,12 @@ pub struct Node {
 
 impl Node {
     pub fn new(id: i32, host: impl Into<String>, port: u16) -> Self {
-        Self { id, host: host.into(), port, rack: None }
+        Self {
+            id,
+            host: host.into(),
+            port,
+            rack: None,
+        }
     }
 
     pub fn address(&self) -> String {

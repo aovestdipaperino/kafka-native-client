@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicI32, Ordering};
 use crate::common::Cluster;
+use std::sync::atomic::{AtomicI32, Ordering};
 
 /// Trait for determining which partition a record should be sent to.
 pub trait Partitioner: Send + Sync {
@@ -20,7 +20,9 @@ pub struct DefaultPartitioner {
 
 impl DefaultPartitioner {
     pub fn new() -> Self {
-        Self { counter: AtomicI32::new(0) }
+        Self {
+            counter: AtomicI32::new(0),
+        }
     }
 }
 
@@ -124,13 +126,15 @@ mod tests {
 
     fn make_cluster(topic: &str, num_partitions: i32) -> Cluster {
         let node = Node::new(0, "localhost", 9092);
-        let partitions = (0..num_partitions).map(|i| PartitionInfo {
-            topic: topic.into(),
-            partition: i,
-            leader: Some(node.clone()),
-            replicas: vec![node.clone()],
-            in_sync_replicas: vec![node.clone()],
-        }).collect();
+        let partitions = (0..num_partitions)
+            .map(|i| PartitionInfo {
+                topic: topic.into(),
+                partition: i,
+                leader: Some(node.clone()),
+                replicas: vec![node.clone()],
+                in_sync_replicas: vec![node.clone()],
+            })
+            .collect();
         Cluster::new(vec![node], partitions)
     }
 

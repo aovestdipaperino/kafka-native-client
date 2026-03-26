@@ -1,6 +1,6 @@
-use std::collections::{HashMap, HashSet};
-use crate::common::TopicPartition;
 use super::consumer_record::ConsumerRecord;
+use crate::common::TopicPartition;
+use std::collections::{HashMap, HashSet};
 
 /// A batch of consumer records returned by poll().
 pub struct ConsumerRecords {
@@ -13,7 +13,9 @@ impl ConsumerRecords {
     }
 
     pub fn empty() -> Self {
-        Self { records: HashMap::new() }
+        Self {
+            records: HashMap::new(),
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -39,8 +41,8 @@ impl ConsumerRecords {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::consumer_record::TimestampType;
+    use super::*;
     use bytes::Bytes;
 
     fn make_record(topic: &str, partition: i32, offset: i64) -> ConsumerRecord {
@@ -64,7 +66,10 @@ mod tests {
         let tp0 = TopicPartition::new("test", 0);
         let tp1 = TopicPartition::new("test", 1);
         let mut map = HashMap::new();
-        map.insert(tp0.clone(), vec![make_record("test", 0, 0), make_record("test", 0, 1)]);
+        map.insert(
+            tp0.clone(),
+            vec![make_record("test", 0, 0), make_record("test", 0, 1)],
+        );
         map.insert(tp1.clone(), vec![make_record("test", 1, 0)]);
         let records = ConsumerRecords::new(map);
         assert_eq!(records.count(), 3);
@@ -85,7 +90,10 @@ mod tests {
     fn test_iter() {
         let tp = TopicPartition::new("test", 0);
         let mut map = HashMap::new();
-        map.insert(tp, vec![make_record("test", 0, 0), make_record("test", 0, 1)]);
+        map.insert(
+            tp,
+            vec![make_record("test", 0, 0), make_record("test", 0, 1)],
+        );
         let records = ConsumerRecords::new(map);
         assert_eq!(records.iter().count(), 2);
     }

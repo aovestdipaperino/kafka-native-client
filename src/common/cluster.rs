@@ -1,5 +1,5 @@
+use crate::common::{Node, PartitionInfo, TopicPartition};
 use std::collections::HashMap;
-use crate::common::{Node, TopicPartition, PartitionInfo};
 
 /// An immutable snapshot of the Kafka cluster metadata.
 #[derive(Debug, Clone)]
@@ -17,13 +17,24 @@ impl Cluster {
         let mut leaders: HashMap<TopicPartition, Node> = HashMap::new();
 
         for p in &partitions {
-            partitions_by_topic.entry(p.topic.clone()).or_default().push(p.clone());
+            partitions_by_topic
+                .entry(p.topic.clone())
+                .or_default()
+                .push(p.clone());
             if let Some(leader) = &p.leader {
-                leaders.insert(TopicPartition::new(p.topic.clone(), p.partition), leader.clone());
+                leaders.insert(
+                    TopicPartition::new(p.topic.clone(), p.partition),
+                    leader.clone(),
+                );
             }
         }
 
-        Self { nodes, nodes_by_id, partitions_by_topic, leaders }
+        Self {
+            nodes,
+            nodes_by_id,
+            partitions_by_topic,
+            leaders,
+        }
     }
 
     pub fn empty() -> Self {
@@ -43,7 +54,10 @@ impl Cluster {
     }
 
     pub fn partitions_for_topic(&self, topic: &str) -> &[PartitionInfo] {
-        self.partitions_by_topic.get(topic).map(|v| v.as_slice()).unwrap_or(&[])
+        self.partitions_by_topic
+            .get(topic)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
     }
 
     pub fn topics(&self) -> impl Iterator<Item = &str> {
@@ -73,13 +87,15 @@ mod tests {
     #[test]
     fn test_cluster_partitions_for_topic() {
         let node = Node::new(0, "localhost", 9092);
-        let partitions: Vec<PartitionInfo> = (0..3).map(|i| PartitionInfo {
-            topic: "test".into(),
-            partition: i,
-            leader: Some(node.clone()),
-            replicas: vec![node.clone()],
-            in_sync_replicas: vec![node.clone()],
-        }).collect();
+        let partitions: Vec<PartitionInfo> = (0..3)
+            .map(|i| PartitionInfo {
+                topic: "test".into(),
+                partition: i,
+                leader: Some(node.clone()),
+                replicas: vec![node.clone()],
+                in_sync_replicas: vec![node.clone()],
+            })
+            .collect();
         let cluster = Cluster::new(vec![node], partitions);
         assert_eq!(cluster.partitions_for_topic("test").len(), 3);
         assert_eq!(cluster.partitions_for_topic("unknown").len(), 0);

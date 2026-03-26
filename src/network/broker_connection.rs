@@ -1,9 +1,9 @@
-use bytes::{Bytes, BytesMut, Buf, BufMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::{mpsc, oneshot, Semaphore, OwnedSemaphorePermit};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 
 use crate::error::{KafkaError, Result};
 
@@ -38,10 +38,12 @@ impl BrokerConnection {
         addr: String,
         max_in_flight: usize,
     ) -> Result<(Self, BrokerSender)> {
-        let stream = TcpStream::connect(&addr).await.map_err(|e| KafkaError::ConnectionFailed {
-            broker_id,
-            message: format!("failed to connect to {addr}: {e}"),
-        })?;
+        let stream = TcpStream::connect(&addr)
+            .await
+            .map_err(|e| KafkaError::ConnectionFailed {
+                broker_id,
+                message: format!("failed to connect to {addr}: {e}"),
+            })?;
 
         let semaphore = Arc::new(Semaphore::new(max_in_flight));
         let (tx, rx) = mpsc::channel(max_in_flight * 2);
@@ -171,12 +173,13 @@ impl BrokerSender {
 
         let (resp_tx, resp_rx) = oneshot::channel();
 
-        self.tx.send((correlation_id, request, resp_tx, permit)).await.map_err(|_| {
-            KafkaError::ConnectionFailed {
+        self.tx
+            .send((correlation_id, request, resp_tx, permit))
+            .await
+            .map_err(|_| KafkaError::ConnectionFailed {
                 broker_id: self.broker_id,
                 message: "connection closed".into(),
-            }
-        })?;
+            })?;
 
         resp_rx.await.map_err(|_| KafkaError::ConnectionFailed {
             broker_id: self.broker_id,
@@ -192,8 +195,8 @@ impl BrokerSender {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::net::TcpListener;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     #[tokio::test]
     async fn test_broker_connection_roundtrip() {
@@ -214,7 +217,9 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         });
 
-        let (conn, sender) = BrokerConnection::connect(0, addr.to_string(), 5).await.unwrap();
+        let (conn, sender) = BrokerConnection::connect(0, addr.to_string(), 5)
+            .await
+            .unwrap();
         let conn_handle = tokio::spawn(conn.run());
 
         // Build a request with correlation_id = 42
@@ -251,7 +256,9 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         });
 
-        let (conn, sender) = BrokerConnection::connect(0, addr.to_string(), 5).await.unwrap();
+        let (conn, sender) = BrokerConnection::connect(0, addr.to_string(), 5)
+            .await
+            .unwrap();
         let conn_handle = tokio::spawn(conn.run());
 
         for i in 0..3i32 {

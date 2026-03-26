@@ -9,7 +9,10 @@ pub struct TopicPartition {
 
 impl TopicPartition {
     pub fn new(topic: impl Into<String>, partition: i32) -> Self {
-        Self { topic: topic.into(), partition }
+        Self {
+            topic: topic.into(),
+            partition,
+        }
     }
 }
 

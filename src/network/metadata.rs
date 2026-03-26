@@ -1,15 +1,15 @@
 use std::collections::HashSet;
-use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, RwLock};
 use tokio::sync::Notify;
 
-use proto_kafka::messages::{MetadataRequest, MetadataResponse, TopicName};
 use proto_kafka::messages::metadata_request::MetadataRequestTopic;
+use proto_kafka::messages::{MetadataRequest, MetadataResponse, TopicName};
 use proto_kafka::protocol::StrBytes;
 
-use crate::common::{Cluster, Node, TopicPartition, PartitionInfo};
-use crate::error::{KafkaError, Result};
 use super::connection_manager::ConnectionManager;
+use crate::common::{Cluster, Node, PartitionInfo, TopicPartition};
+use crate::error::{KafkaError, Result};
 
 pub struct Metadata {
     cluster: RwLock<Arc<Cluster>>,
@@ -53,12 +53,13 @@ impl Metadata {
         self.add_topic(&tp.topic);
         self.fetch().await?;
 
-        self.cluster().leader_for(tp).cloned().ok_or_else(|| {
-            KafkaError::ConnectionFailed {
+        self.cluster()
+            .leader_for(tp)
+            .cloned()
+            .ok_or_else(|| KafkaError::ConnectionFailed {
                 broker_id: -1,
                 message: format!("no leader for {tp}"),
-            }
-        })
+            })
     }
 
     /// Fetch metadata from the cluster.
@@ -69,10 +70,15 @@ impl Metadata {
         let topic_list: Option<Vec<MetadataRequestTopic>> = if topics.is_empty() {
             None // Fetch all topics
         } else {
-            Some(topics.iter().map(|t| {
-                MetadataRequestTopic::default()
-                    .with_name(Some(TopicName(StrBytes::from_string(t.clone()))))
-            }).collect())
+            Some(
+                topics
+                    .iter()
+                    .map(|t| {
+                        MetadataRequestTopic::default()
+                            .with_name(Some(TopicName(StrBytes::from_string(t.clone()))))
+                    })
+                    .collect(),
+            )
         };
 
         let request = MetadataRequest::default()
@@ -87,7 +93,8 @@ impl Metadata {
 
         // Register discovered brokers with the connection manager
         for node in cluster.nodes() {
-            self.connection_manager.register_broker(node.id, node.address());
+            self.connection_manager
+                .register_broker(node.id, node.address());
         }
 
         // Update cached cluster
@@ -118,32 +125,44 @@ impl Metadata {
     }
 
     fn parse_metadata_response(response: &MetadataResponse) -> Cluster {
-        let nodes: Vec<Node> = response.brokers.iter().map(|b| {
-            Node::new(
-                b.node_id.0,
-                b.host.as_str(),
-                u16::try_from(b.port).unwrap_or(9092),
-            )
-        }).collect();
-
-        let partitions: Vec<PartitionInfo> = response.topics.iter().flat_map(|t| {
-            let topic_name = t.name.as_ref().map(|n| n.0.to_string()).unwrap_or_default();
-            let nodes_ref = &nodes;
-            t.partitions.iter().map(move |p| {
-                let leader = nodes_ref.iter().find(|n| n.id == p.leader_id.0).cloned();
-                PartitionInfo {
-                    topic: topic_name.clone(),
-                    partition: p.partition_index,
-                    leader,
-                    replicas: p.replica_nodes.iter()
-                        .filter_map(|id| nodes_ref.iter().find(|n| n.id == id.0).cloned())
-                        .collect(),
-                    in_sync_replicas: p.isr_nodes.iter()
-                        .filter_map(|id| nodes_ref.iter().find(|n| n.id == id.0).cloned())
-                        .collect(),
-                }
+        let nodes: Vec<Node> = response
+            .brokers
+            .iter()
+            .map(|b| {
+                Node::new(
+                    b.node_id.0,
+                    b.host.as_str(),
+                    u16::try_from(b.port).unwrap_or(9092),
+                )
             })
-        }).collect();
+            .collect();
+
+        let partitions: Vec<PartitionInfo> = response
+            .topics
+            .iter()
+            .flat_map(|t| {
+                let topic_name = t.name.as_ref().map(|n| n.0.to_string()).unwrap_or_default();
+                let nodes_ref = &nodes;
+                t.partitions.iter().map(move |p| {
+                    let leader = nodes_ref.iter().find(|n| n.id == p.leader_id.0).cloned();
+                    PartitionInfo {
+                        topic: topic_name.clone(),
+                        partition: p.partition_index,
+                        leader,
+                        replicas: p
+                            .replica_nodes
+                            .iter()
+                            .filter_map(|id| nodes_ref.iter().find(|n| n.id == id.0).cloned())
+                            .collect(),
+                        in_sync_replicas: p
+                            .isr_nodes
+                            .iter()
+                            .filter_map(|id| nodes_ref.iter().find(|n| n.id == id.0).cloned())
+                            .collect(),
+                    }
+                })
+            })
+            .collect();
 
         Cluster::new(nodes, partitions)
     }
@@ -152,8 +171,10 @@ impl Metadata {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proto_kafka::messages::{MetadataResponse, BrokerId, TopicName};
-    use proto_kafka::messages::metadata_response::{MetadataResponseBroker, MetadataResponseTopic, MetadataResponsePartition};
+    use proto_kafka::messages::metadata_response::{
+        MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic,
+    };
+    use proto_kafka::messages::{BrokerId, MetadataResponse, TopicName};
 
     #[test]
     fn test_parse_metadata_response() {

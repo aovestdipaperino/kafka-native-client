@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use crate::{KafkaError, Result};
 use super::common_config::CommonConfig;
+use crate::{KafkaError, Result};
 
 /// Strategy for resetting the consumer offset when no committed offset exists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,12 +163,14 @@ impl ConsumerConfigBuilder {
     }
 
     pub fn build(self) -> Result<ConsumerConfig> {
-        let bootstrap_servers = self.bootstrap_servers.ok_or_else(|| {
-            KafkaError::Config("bootstrap.servers is required".into())
-        })?;
+        let bootstrap_servers = self
+            .bootstrap_servers
+            .ok_or_else(|| KafkaError::Config("bootstrap.servers is required".into()))?;
 
         if bootstrap_servers.is_empty() {
-            return Err(KafkaError::Config("bootstrap.servers must not be empty".into()));
+            return Err(KafkaError::Config(
+                "bootstrap.servers must not be empty".into(),
+            ));
         }
 
         let enable_auto_commit = self.enable_auto_commit.unwrap_or(true);
@@ -184,7 +186,9 @@ impl ConsumerConfigBuilder {
             group_id: self.group_id,
             group_instance_id: self.group_instance_id,
             client_id: self.client_id.unwrap_or_default(),
-            auto_offset_reset: self.auto_offset_reset.unwrap_or(OffsetResetStrategy::Latest),
+            auto_offset_reset: self
+                .auto_offset_reset
+                .unwrap_or(OffsetResetStrategy::Latest),
             enable_auto_commit,
             auto_commit_interval_ms: self.auto_commit_interval_ms.unwrap_or(5_000),
             fetch_min_bytes: self.fetch_min_bytes.unwrap_or(1),
@@ -223,8 +227,8 @@ impl TryFrom<HashMap<String, String>> for ConsumerConfig {
                     builder = builder.client_id(value.clone());
                 }
                 "auto.offset.reset" => {
-                    let strategy = OffsetResetStrategy::parse(value)
-                        .map_err(|e| KafkaError::Config(e))?;
+                    let strategy =
+                        OffsetResetStrategy::parse(value).map_err(KafkaError::Config)?;
                     builder = builder.auto_offset_reset(strategy);
                 }
                 "enable.auto.commit" => {

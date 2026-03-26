@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use crate::metrics::meter::KafkaMetric;
 use crate::metrics::stat::Stat;
+use std::sync::Arc;
 
 /// A named measurement point that updates one or more metrics.
 pub struct Sensor {
@@ -10,12 +10,29 @@ pub struct Sensor {
 
 impl Sensor {
     pub fn new(name: impl Into<String>) -> Self {
-        Self { name: name.into(), metrics: std::sync::Mutex::new(vec![]) }
+        Self {
+            name: name.into(),
+            metrics: std::sync::Mutex::new(vec![]),
+        }
     }
 
-    pub fn add(&self, group: &str, name: &str, tags: &[(&str, &str)], stat: Box<dyn Stat>) -> Arc<KafkaMetric> {
-        let tags = tags.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
-        let metric = Arc::new(KafkaMetric::new(group.to_string(), name.to_string(), tags, stat));
+    pub fn add(
+        &self,
+        group: &str,
+        name: &str,
+        tags: &[(&str, &str)],
+        stat: Box<dyn Stat>,
+    ) -> Arc<KafkaMetric> {
+        let tags = tags
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let metric = Arc::new(KafkaMetric::new(
+            group.to_string(),
+            name.to_string(),
+            tags,
+            stat,
+        ));
         self.metrics.lock().unwrap().push(metric.clone());
         metric
     }

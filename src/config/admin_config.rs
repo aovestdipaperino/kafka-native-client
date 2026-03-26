@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use crate::{KafkaError, Result};
 use super::common_config::CommonConfig;
+use crate::{KafkaError, Result};
 
 /// Configuration for the Kafka admin client.
 #[derive(Debug, Clone)]
@@ -60,12 +60,14 @@ impl AdminConfigBuilder {
     }
 
     pub fn build(self) -> Result<AdminConfig> {
-        let bootstrap_servers = self.bootstrap_servers.ok_or_else(|| {
-            KafkaError::Config("bootstrap.servers is required".into())
-        })?;
+        let bootstrap_servers = self
+            .bootstrap_servers
+            .ok_or_else(|| KafkaError::Config("bootstrap.servers is required".into()))?;
 
         if bootstrap_servers.is_empty() {
-            return Err(KafkaError::Config("bootstrap.servers must not be empty".into()));
+            return Err(KafkaError::Config(
+                "bootstrap.servers must not be empty".into(),
+            ));
         }
 
         Ok(AdminConfig {

@@ -1,20 +1,19 @@
+use bytes::BytesMut;
 use std::collections::HashMap;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicI32, Ordering};
-use bytes::BytesMut;
 use tokio::task::JoinHandle;
 
-use proto_kafka::protocol::{
-    Encodable, Decodable, Request, VersionRange,
-    encode_request_header_into_buffer,
-};
-use proto_kafka::protocol::StrBytes;
 use proto_kafka::messages::{
     ApiKey, ApiVersionsRequest, ApiVersionsResponse, RequestHeader, ResponseHeader,
 };
+use proto_kafka::protocol::StrBytes;
+use proto_kafka::protocol::{
+    Decodable, Encodable, Request, VersionRange, encode_request_header_into_buffer,
+};
 
-use crate::error::{KafkaError, Result};
 use super::broker_connection::{BrokerConnection, BrokerSender};
+use crate::error::{KafkaError, Result};
 
 /// Per-broker API version info.
 #[derive(Debug, Clone)]
@@ -24,9 +23,19 @@ pub struct BrokerApiVersions {
 
 impl BrokerApiVersions {
     pub fn new(response: &ApiVersionsResponse) -> Self {
-        let versions = response.api_keys.iter().map(|v| {
-            (v.api_key, VersionRange { min: v.min_version, max: v.max_version })
-        }).collect();
+        let versions = response
+            .api_keys
+            .iter()
+            .map(|v| {
+                (
+                    v.api_key,
+                    VersionRange {
+                        min: v.min_version,
+                        max: v.max_version,
+                    },
+                )
+            })
+            .collect();
         Self { versions }
     }
 
@@ -39,7 +48,11 @@ impl BrokerApiVersions {
         let client_range = R::VERSIONS;
         let broker_range = self.version_range(R::KEY)?;
         let usable = client_range.intersect(broker_range);
-        if usable.is_empty() { None } else { Some(usable.max) }
+        if usable.is_empty() {
+            None
+        } else {
+            Some(usable.max)
+        }
     }
 }
 
@@ -92,17 +105,30 @@ impl ConnectionManager {
 
     /// Connect to a specific broker address, perform ApiVersions handshake.
     async fn connect_to_address(&self, broker_id: i32, addr: String) -> Result<()> {
-        let (conn, sender) = BrokerConnection::connect(broker_id, addr.clone(), self.max_in_flight).await?;
+        let (conn, sender) =
+            BrokerConnection::connect(broker_id, addr.clone(), self.max_in_flight).await?;
         let handle = tokio::spawn(conn.run());
 
         // Store connection
-        self.connections.write().unwrap().insert(broker_id, sender.clone());
-        self.connection_handles.write().unwrap().insert(broker_id, handle);
-        self.broker_addresses.write().unwrap().insert(broker_id, addr);
+        self.connections
+            .write()
+            .unwrap()
+            .insert(broker_id, sender.clone());
+        self.connection_handles
+            .write()
+            .unwrap()
+            .insert(broker_id, handle);
+        self.broker_addresses
+            .write()
+            .unwrap()
+            .insert(broker_id, addr);
 
         // Perform ApiVersions handshake
         let api_versions = self.do_api_versions_handshake(broker_id, &sender).await?;
-        self.api_versions.write().unwrap().insert(broker_id, api_versions);
+        self.api_versions
+            .write()
+            .unwrap()
+            .insert(broker_id, api_versions);
 
         Ok(())
     }
@@ -117,11 +143,18 @@ impl ConnectionManager {
 
     /// Register a broker's address for later connection.
     pub fn register_broker(&self, broker_id: i32, addr: String) {
-        self.broker_addresses.write().unwrap().insert(broker_id, addr);
+        self.broker_addresses
+            .write()
+            .unwrap()
+            .insert(broker_id, addr);
     }
 
     /// Perform the ApiVersions handshake on a connection.
-    async fn do_api_versions_handshake(&self, _broker_id: i32, sender: &BrokerSender) -> Result<BrokerApiVersions> {
+    async fn do_api_versions_handshake(
+        &self,
+        _broker_id: i32,
+        sender: &BrokerSender,
+    ) -> Result<BrokerApiVersions> {
         let correlation_id = self.next_correlation_id();
 
         // Build ApiVersionsRequest (version 3 — supports client software name/version)
@@ -163,10 +196,13 @@ impl ConnectionManager {
     {
         let sender = {
             let conns = self.connections.read().unwrap();
-            conns.get(&broker_id).cloned().ok_or_else(|| KafkaError::ConnectionFailed {
-                broker_id,
-                message: "no connection to broker".into(),
-            })?
+            conns
+                .get(&broker_id)
+                .cloned()
+                .ok_or_else(|| KafkaError::ConnectionFailed {
+                    broker_id,
+                    message: "no connection to broker".into(),
+                })?
         };
 
         // Determine API version to use
@@ -208,7 +244,11 @@ impl ConnectionManager {
 
     /// Get the address for a broker ID.
     pub fn broker_address(&self, broker_id: i32) -> Option<String> {
-        self.broker_addresses.read().unwrap().get(&broker_id).cloned()
+        self.broker_addresses
+            .read()
+            .unwrap()
+            .get(&broker_id)
+            .cloned()
     }
 }
 

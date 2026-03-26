@@ -1,5 +1,5 @@
-use std::sync::Mutex;
 use crate::metrics::stat::Stat;
+use std::sync::Mutex;
 
 /// A named metric backed by a Stat.
 pub struct KafkaMetric {
@@ -10,8 +10,18 @@ pub struct KafkaMetric {
 }
 
 impl KafkaMetric {
-    pub fn new(group: String, name: String, tags: Vec<(String, String)>, stat: Box<dyn Stat>) -> Self {
-        Self { group, name, tags, stat: Mutex::new(stat) }
+    pub fn new(
+        group: String,
+        name: String,
+        tags: Vec<(String, String)>,
+        stat: Box<dyn Stat>,
+    ) -> Self {
+        Self {
+            group,
+            name,
+            tags,
+            stat: Mutex::new(stat),
+        }
     }
 
     pub fn record(&self, value: f64) {

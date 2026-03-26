@@ -9,6 +9,9 @@ pub struct RecordHeader {
 
 impl RecordHeader {
     pub fn new(key: impl Into<String>, value: impl Into<Bytes>) -> Self {
-        Self { key: key.into(), value: Some(value.into()) }
+        Self {
+            key: key.into(),
+            value: Some(value.into()),
+        }
     }
 }

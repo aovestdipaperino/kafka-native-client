@@ -1,21 +1,30 @@
+use crate::metrics::meter::KafkaMetric;
+use crate::metrics::sensor::Sensor;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-use crate::metrics::sensor::Sensor;
-use crate::metrics::meter::KafkaMetric;
 
 /// Central storage for all metrics.
 pub struct MetricsRegistry {
     sensors: RwLock<HashMap<String, Arc<Sensor>>>,
 }
 
+impl Default for MetricsRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MetricsRegistry {
     pub fn new() -> Self {
-        Self { sensors: RwLock::new(HashMap::new()) }
+        Self {
+            sensors: RwLock::new(HashMap::new()),
+        }
     }
 
     pub fn sensor(&self, name: &str) -> Arc<Sensor> {
         let mut sensors = self.sensors.write().unwrap();
-        sensors.entry(name.to_string())
+        sensors
+            .entry(name.to_string())
             .or_insert_with(|| Arc::new(Sensor::new(name)))
             .clone()
     }

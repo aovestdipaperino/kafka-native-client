@@ -11,7 +11,11 @@ pub struct OffsetAndMetadata {
 
 impl OffsetAndMetadata {
     pub fn new(offset: i64) -> Self {
-        Self { offset, metadata: None, leader_epoch: None }
+        Self {
+            offset,
+            metadata: None,
+            leader_epoch: None,
+        }
     }
 }
 

@@ -1,5 +1,5 @@
-use bytes::Bytes;
 use crate::common::RecordHeader;
+use bytes::Bytes;
 
 /// Timestamp type for consumer records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
