@@ -33,6 +33,8 @@ A Rust reimplementation of the Apache Kafka Java client (producer, consumer, adm
 └─────────────────────────────────────────────────┘
 ```
 
+Each client instance (producer, consumer, admin) creates its own `ConnectionManager` and `Metadata`. They reuse the same code but do not share runtime state.
+
 ## Module Structure
 
 ```
@@ -68,7 +70,7 @@ src/
 │   ├── kafka_producer.rs     # KafkaProducer (bytes API)
 │   ├── producer_record.rs    # ProducerRecord
 │   ├── record_metadata.rs    # RecordMetadata (ack result)
-│   ├── record_accumulator.rs # Batching records by partition
+│   ├── record_accumulator.rs # Batching records by partition, BufferPool
 │   ├── sender.rs             # Background task: drain batches, send ProduceRequests
 │   ├── partitioner.rs        # Default/round-robin/sticky partitioning
 │   ├── idempotent.rs         # ProducerIdManager: InitProducerId, epoch management
@@ -80,11 +82,13 @@ src/
 │   ├── consumer_records.rs   # ConsumerRecords (batch from poll)
 │   ├── fetcher.rs            # Fetch request lifecycle
 │   ├── subscription_state.rs # Topic/partition subscription tracking
-│   ├── offset.rs             # OffsetAndMetadata, OffsetResetStrategy
-│   └── group_coordinator.rs  # Join/Sync/Heartbeat/LeaveGroup
+│   ├── offset.rs             # OffsetAndMetadata, OffsetResetStrategy, OffsetAndTimestamp
+│   ├── group_coordinator.rs  # Join/Sync/Heartbeat/LeaveGroup
+│   └── rebalance_listener.rs # ConsumerRebalanceListener trait
 ├── admin/
 │   ├── mod.rs
 │   ├── admin_client.rs       # AdminClient
+│   ├── types.rs              # NewTopic, TopicResult, TopicListing, etc.
 │   ├── create_topics.rs      # CreateTopics operation
 │   ├── delete_topics.rs      # DeleteTopics operation
 │   ├── describe_topics.rs    # DescribeTopics/metadata query
@@ -97,7 +101,6 @@ src/
 │   ├── typed_producer.rs     # TypedProducer<K,V> wrapper
 │   ├── typed_consumer.rs     # TypedConsumer<K,V> wrapper
 │   └── builtin.rs            # String, Vec<u8>, Bytes, i32, i64 impls
-└── main.rs                   # To be removed (library crate)
 ```
 
 ## Network Layer
@@ -119,14 +122,19 @@ Client code ──mpsc::Sender──▶ BrokerConnection task ──TcpStream─
 - Reads responses: 4-byte length prefix + body, extracts correlation_id from first 4 bytes of body
 - Maintains a `HashMap<i32, oneshot::Sender<Bytes>>` for pending requests
 - Reconnects on disconnect with exponential backoff
-- Enforces `max.in.flight.requests.per.connection` by limiting the pending map size
+- On connect: sends `ApiVersionsRequest` to negotiate supported protocol versions per API key; stores version ranges for use by `ConnectionManager` when encoding requests
+
+**In-flight request admission control**: A `tokio::sync::Semaphore` with `max.in.flight.requests.per.connection` permits is owned by the `BrokerConnection`. The `ConnectionManager` acquires a permit *before* sending into the mpsc channel, and the `BrokerConnection` releases the permit when the response arrives. This ensures back-pressure propagates to callers and guarantees ordering when `max.in.flight = 1` (required for idempotent producer ordering).
+
+**Throttle handling**: When a response contains `throttle_time_ms > 0`, the BrokerConnection delays reading from the mpsc channel for that duration, honoring broker-side quota enforcement.
 
 ### ConnectionManager
 
 - `HashMap<i32, mpsc::Sender<...>>` mapping broker ID → channel to its BrokerConnection task
-- `async fn send<R: proto_kafka::protocol::Request>(&self, broker_id: i32, request: R) -> Result<R::Response>` — encodes request via proto-kafka, sends through channel, awaits oneshot, decodes response
+- `async fn send<R: proto_kafka::protocol::Request>(&self, broker_id: i32, request: R) -> Result<R::Response>` — acquires in-flight semaphore permit, encodes request via proto-kafka (using negotiated API version), sends through channel, awaits oneshot, decodes response
 - Lazily spawns BrokerConnection tasks on first send to a broker
 - Bootstrap: connects to initial `bootstrap.servers` addresses to discover broker IDs
+- Stores per-broker `ApiVersions` (populated after each BrokerConnection handshake)
 
 ### Metadata
 
@@ -144,13 +152,17 @@ Public API:
 ```rust
 impl KafkaProducer {
     pub async fn new(config: ProducerConfig) -> Result<Self>;
-    pub async fn send(&self, record: ProducerRecord) -> Result<oneshot::Receiver<Result<RecordMetadata>>>;
+    pub fn send(&self, record: ProducerRecord, callback: Option<Callback>) -> Result<SendFuture>;
     pub async fn flush(&self) -> Result<()>;
     pub async fn partitions_for(&self, topic: &str) -> Result<Vec<PartitionInfo>>;
     pub fn metrics(&self) -> &MetricsRegistry;
-    pub async fn close(self) -> Result<()>;
+    pub async fn close(self, timeout: Duration) -> Result<()>;
 }
 ```
+
+`send()` is a non-async method that appends to the accumulator and returns a `SendFuture` (wrapping the internal oneshot). The `SendFuture` resolves to `Result<RecordMetadata>` when the broker acks the batch. If a `Callback` is provided, it is invoked when the response arrives (before the future resolves). If accumulator memory is exhausted, `send()` blocks for up to `max.block.ms` (via a tokio semaphore with timeout) before returning `Err(KafkaError::BufferExhausted)`.
+
+`close(timeout)` flushes remaining batches and shuts down the Sender task within the given timeout.
 
 ### ProducerRecord / RecordMetadata
 
@@ -179,30 +191,34 @@ pub struct RecordMetadata {
 - Groups records into `ProducerBatch` per `TopicPartition`
 - Each batch backed by a `BytesMut` buffer, bounded by `batch.size`
 - Records appended as proto-kafka `Record` structs, encoded into batch via `RecordBatchEncoder`
+- Compression applied per-batch according to `compression.type` config, using proto-kafka's built-in compression support
 - Tracks `linger.ms` deadline per batch — batch is "ready" when full OR linger timer expires
 - `drain(ready_nodes)` returns batches grouped by destination broker
 - Uses a `tokio::sync::Notify` or channel to wake the Sender when batches become ready
+
+**Memory management**: Total memory across all batches is bounded by `buffer.memory` (default 32MB). Implemented as a `tokio::sync::Semaphore` where each permit represents one byte. `send()` acquires `record_size` permits with a timeout of `max.block.ms`. If the semaphore times out, returns `Err(KafkaError::BufferExhausted)`. Permits are released when a batch is completed (acked or failed).
 
 ### Sender
 
 Background tokio task spawned on producer creation:
 
-1. Polls `RecordAccumulator` for ready batches (respecting linger.ms)
+1. Polls `RecordAccumulator` for ready batches (respecting `linger.ms`)
 2. Groups batches by destination broker (from metadata leader mapping)
-3. For each broker, builds a `ProduceRequest` containing all its batches
+3. For each broker, builds a `ProduceRequest` containing all its batches (respecting `max.request.size`)
 4. Sends via `ConnectionManager`, handles response:
-   - Success → completes oneshot callbacks with `RecordMetadata`
-   - Retriable error → re-enqueues batch (respecting `retries` and `retry.backoff.ms`)
-   - Fatal error → completes oneshot callbacks with error
-5. For idempotent producer: includes producer_id and epoch in ProduceRequest, tracks sequence numbers per partition
+   - Success → completes callbacks/futures with `RecordMetadata`
+   - Retriable error → re-enqueues batch (respecting `retries`, `retry.backoff.ms`, and `delivery.timeout.ms`)
+   - Fatal error → completes callbacks/futures with error
+5. **Batch expiration**: batches older than `delivery.timeout.ms` are failed without sending
+6. For idempotent producer: includes `producer_id` and `epoch` in ProduceRequest, tracks sequence numbers per partition
 
 ### Idempotent Producer
 
 - `ProducerIdManager` sends `InitProducerIdRequest` on startup to obtain `(producer_id, epoch)`
 - Maintains per-partition sequence numbers, incremented with each batch
 - Sets `ProduceRequest` fields: `producer_id`, `producer_epoch`, `first_sequence` on each batch
-- On `OutOfOrderSequenceNumber`: resets sequence and retries
-- On `InvalidProducerEpoch` / `ProducerFenced`: propagates fatal error
+- On `OutOfOrderSequenceNumber`: fails all in-flight batches for that partition, re-initializes producer ID if needed. Ordering guarantees depend on `max.in.flight.requests.per.connection` (must be 1 for strict ordering).
+- On `InvalidProducerEpoch` / `ProducerFenced`: propagates fatal `KafkaError::ProducerFenced`, no further sends allowed
 - Enabled when `enable.idempotence = true` (default true, matching Java 3.0+)
 
 ### Partitioner
@@ -220,7 +236,7 @@ Public API:
 ```rust
 impl KafkaConsumer {
     pub async fn new(config: ConsumerConfig) -> Result<Self>;
-    pub fn subscribe(&self, topics: &[&str]) -> Result<()>;
+    pub fn subscribe(&self, topics: &[&str], listener: Option<Box<dyn ConsumerRebalanceListener>>) -> Result<()>;
     pub fn assign(&self, partitions: &[TopicPartition]) -> Result<()>;
     pub fn unsubscribe(&self) -> Result<()>;
     pub async fn poll(&self, timeout: Duration) -> Result<ConsumerRecords>;
@@ -232,17 +248,38 @@ impl KafkaConsumer {
     pub fn seek_to_end(&self, partitions: &[TopicPartition]) -> Result<()>;
     pub async fn position(&self, partition: &TopicPartition) -> Result<i64>;
     pub async fn committed(&self, partitions: &[TopicPartition]) -> Result<HashMap<TopicPartition, OffsetAndMetadata>>;
+    pub async fn offsets_for_times(&self, timestamps: HashMap<TopicPartition, i64>) -> Result<HashMap<TopicPartition, OffsetAndTimestamp>>;
+    pub async fn beginning_offsets(&self, partitions: &[TopicPartition]) -> Result<HashMap<TopicPartition, i64>>;
+    pub async fn end_offsets(&self, partitions: &[TopicPartition]) -> Result<HashMap<TopicPartition, i64>>;
+    pub fn current_lag(&self, partition: &TopicPartition) -> Option<i64>;
     pub fn assignment(&self) -> HashSet<TopicPartition>;
     pub fn subscription(&self) -> HashSet<String>;
     pub async fn partitions_for(&self, topic: &str) -> Result<Vec<PartitionInfo>>;
     pub fn pause(&self, partitions: &[TopicPartition]) -> Result<()>;
     pub fn resume(&self, partitions: &[TopicPartition]) -> Result<()>;
     pub fn paused(&self) -> HashSet<TopicPartition>;
+    pub fn group_metadata(&self) -> ConsumerGroupMetadata;
     pub fn metrics(&self) -> &MetricsRegistry;
-    pub async fn close(self) -> Result<()>;
+    pub async fn close(self, timeout: Duration) -> Result<()>;
     pub fn wakeup(&self);
 }
 ```
+
+`subscribe()` is a local state change only — it records the subscription in `SubscriptionState`. Actual group join and partition assignment happen inside `poll()`.
+
+`close(timeout)` commits offsets (if auto-commit enabled), sends `LeaveGroup`, and shuts down within the given timeout.
+
+### ConsumerRebalanceListener
+
+```rust
+pub trait ConsumerRebalanceListener: Send + Sync {
+    fn on_partitions_assigned(&self, partitions: &[TopicPartition]);
+    fn on_partitions_revoked(&self, partitions: &[TopicPartition]);
+    fn on_partitions_lost(&self, partitions: &[TopicPartition]);
+}
+```
+
+Invoked by the `GroupCoordinator` during rebalance (inside `poll()`). `on_partitions_revoked` is called before partitions are reassigned (opportunity to commit offsets). `on_partitions_assigned` is called after new assignment. `on_partitions_lost` is called when partitions are lost due to session timeout (no opportunity for clean commit).
 
 ### ConsumerRecord / ConsumerRecords
 
@@ -287,11 +324,27 @@ impl ConsumerRecords {
 Manages consumer group lifecycle:
 
 1. `FindCoordinator` → discovers group coordinator broker
-2. `JoinGroup` → sends subscription, receives assignment protocol selection
+2. `JoinGroup` → sends subscription (including `group.instance.id` for static membership if configured), receives assignment protocol selection
 3. `SyncGroup` → leader assigns partitions (range assignor), all members receive assignment
-4. `Heartbeat` → background tokio task at `heartbeat.interval.ms`; detects rebalance triggers
-5. `LeaveGroup` → on consumer close
-6. `OffsetCommit` / `OffsetFetch` → commit and retrieve committed offsets through coordinator
+4. Invokes `ConsumerRebalanceListener`: `on_partitions_revoked` before reassignment, `on_partitions_assigned` after
+5. `Heartbeat` → background tokio task at `heartbeat.interval.ms`; detects rebalance triggers
+6. `LeaveGroup` → on consumer close (immediate for static members unless `group.instance.id` is set, in which case session-based leave)
+7. `OffsetCommit` / `OffsetFetch` → commit and retrieve committed offsets through coordinator
+8. **Auto-commit**: when `enable.auto.commit=true`, commits current offsets every `auto.commit.interval.ms` during `poll()`. Auto-commit is async (fire-and-forget). On rebalance, a synchronous commit is attempted before revoking partitions.
+
+### poll() Internal State Machine
+
+`poll(timeout)` drives the entire consumer lifecycle:
+
+1. Check for wakeup signal → return `Err(KafkaError::WakeupException)` if set
+2. Check subscription state → if subscribed topics changed, trigger metadata refresh
+3. **Coordinator**: ensure coordinator is known (send `FindCoordinator` if needed)
+4. **Group membership**: if not in a group (or rebalance triggered), execute join/sync protocol, invoke rebalance listener
+5. **Fetch positions**: for newly assigned partitions, fetch committed offsets (or apply auto.offset.reset)
+6. **Auto-commit**: if interval elapsed, fire async offset commit
+7. **Send fetch requests**: for each assigned partition with a valid position, send `FetchRequest` to the leader (if not already in-flight)
+8. **Await responses**: wait for fetch responses up to remaining timeout
+9. **Decode & return**: decode record batches, respect `max.poll.records`, return `ConsumerRecords`
 
 ### SubscriptionState
 
@@ -320,7 +373,38 @@ impl AdminClient {
 }
 ```
 
-Shares `ConnectionManager` and `Metadata` infrastructure with producer/consumer. Each operation maps to a single Kafka API request/response pair through proto-kafka.
+Creates its own `ConnectionManager` and `Metadata` instances (same code as producer/consumer, separate runtime state). Each operation maps to a single Kafka API request/response pair through proto-kafka.
+
+### Admin Result Types
+
+Each admin operation returns per-resource results that can independently succeed or fail:
+
+```rust
+pub struct TopicResult {
+    pub name: String,
+    pub error: Option<KafkaError>,
+}
+
+pub struct TopicListing {
+    pub name: String,
+    pub topic_id: Uuid,
+    pub is_internal: bool,
+}
+
+pub struct TopicDescription {
+    pub name: String,
+    pub topic_id: Uuid,
+    pub is_internal: bool,
+    pub partitions: Vec<TopicPartitionInfo>,
+}
+
+pub struct TopicPartitionInfo {
+    pub partition: i32,
+    pub leader: Node,
+    pub replicas: Vec<Node>,
+    pub isr: Vec<Node>,
+}
+```
 
 ## Metrics System
 
@@ -360,8 +444,49 @@ Each config struct has:
 1. A builder with typed fields and defaults matching Java's defaults
 2. `impl TryFrom<HashMap<String, String>>` for string-map bridge with runtime validation
 3. Validation on `build()` / `try_from()` (e.g., bootstrap.servers required, acks in {0,1,all})
+4. Validation constraint: `delivery.timeout.ms >= request.timeout.ms + linger.ms`
 
-Common defaults preserved from Java: `batch.size=16384`, `linger.ms=0`, `acks=all`, `retries=i32::MAX`, `fetch.min.bytes=1`, `auto.offset.reset=latest`, `enable.auto.commit=true`, `enable.idempotence=true`.
+### Producer Config Defaults
+
+| Key | Default | Notes |
+|-----|---------|-------|
+| `bootstrap.servers` | (required) | |
+| `acks` | `all` | 0, 1, or all |
+| `batch.size` | 16384 | bytes |
+| `linger.ms` | 5 | Kafka 4.0+ default |
+| `buffer.memory` | 33554432 | 32MB total accumulator memory |
+| `max.block.ms` | 60000 | max time send() blocks when buffer full |
+| `max.request.size` | 1048576 | max size of a ProduceRequest |
+| `delivery.timeout.ms` | 120000 | upper bound on send() to ack time |
+| `request.timeout.ms` | 30000 | per-request network timeout |
+| `retries` | 2147483647 | bounded by delivery.timeout.ms |
+| `retry.backoff.ms` | 100 | |
+| `max.in.flight.requests.per.connection` | 5 | set to 1 for strict ordering |
+| `compression.type` | `none` | none, gzip, snappy, lz4, zstd |
+| `enable.idempotence` | true | |
+| `metadata.max.age.ms` | 300000 | |
+| `client.id` | `""` | |
+
+### Consumer Config Defaults
+
+| Key | Default | Notes |
+|-----|---------|-------|
+| `bootstrap.servers` | (required) | |
+| `group.id` | (required for subscribe) | |
+| `group.instance.id` | `None` | static membership |
+| `auto.offset.reset` | `latest` | latest, earliest, none |
+| `enable.auto.commit` | true | |
+| `auto.commit.interval.ms` | 5000 | |
+| `fetch.min.bytes` | 1 | |
+| `fetch.max.bytes` | 52428800 | |
+| `fetch.max.wait.ms` | 500 | |
+| `max.poll.records` | 500 | |
+| `max.partition.fetch.bytes` | 1048576 | |
+| `session.timeout.ms` | 45000 | |
+| `heartbeat.interval.ms` | 3000 | |
+| `request.timeout.ms` | 30000 | |
+| `metadata.max.age.ms` | 300000 | |
+| `client.id` | `""` | |
 
 ## Error Handling
 
@@ -381,8 +506,10 @@ pub enum KafkaError {
     Timeout,
     /// Consumer wakeup signal
     WakeupException,
-    /// Record too large for configured batch.size / max.request.size
+    /// Record too large for configured max.request.size
     RecordTooLarge { size: usize, limit: usize },
+    /// Producer accumulator memory exhausted (buffer.memory exceeded for max.block.ms)
+    BufferExhausted,
     /// Broker connection failure
     ConnectionFailed { broker_id: i32, message: String },
     /// Group coordinator error (rebalance, unknown member, etc.)
