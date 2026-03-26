@@ -1,10 +1,12 @@
-use crate::error::KafkaError;
 use super::record_metadata::RecordMetadata;
+use crate::error::KafkaError;
 
 /// Callback invoked when a produce request completes.
-pub type Callback = Box<dyn FnOnce(std::result::Result<&RecordMetadata, &KafkaError>) + Send + 'static>;
+pub type Callback =
+    Box<dyn FnOnce(std::result::Result<&RecordMetadata, &KafkaError>) + Send + 'static>;
 
 /// A future that resolves when the broker acknowledges a produced record.
+#[derive(Debug)]
 pub struct SendFuture {
     rx: tokio::sync::oneshot::Receiver<crate::Result<RecordMetadata>>,
 }
@@ -18,13 +20,18 @@ impl SendFuture {
 impl std::future::Future for SendFuture {
     type Output = crate::Result<RecordMetadata>;
 
-    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
         match std::pin::Pin::new(&mut self.rx).poll(cx) {
             std::task::Poll::Ready(Ok(result)) => std::task::Poll::Ready(result),
-            std::task::Poll::Ready(Err(_)) => std::task::Poll::Ready(Err(crate::KafkaError::ConnectionFailed {
-                broker_id: -1,
-                message: "producer shut down".into(),
-            })),
+            std::task::Poll::Ready(Err(_)) => {
+                std::task::Poll::Ready(Err(crate::KafkaError::ConnectionFailed {
+                    broker_id: -1,
+                    message: "producer shut down".into(),
+                }))
+            }
             std::task::Poll::Pending => std::task::Poll::Pending,
         }
     }
@@ -45,7 +52,8 @@ mod tests {
             timestamp: 1000,
             serialized_key_size: -1,
             serialized_value_size: 5,
-        })).unwrap();
+        }))
+        .unwrap();
         let result = future.await.unwrap();
         assert_eq!(result.offset, 42);
     }
