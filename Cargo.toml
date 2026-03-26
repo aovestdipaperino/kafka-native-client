@@ -1,0 +1,20 @@
+[package]
+name = "kafka-native-client"
+version = "0.0.1"
+edition = "2024"
+description = "A native Rust Kafka client (producer, consumer, admin) with high fidelity to the official Java client"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/enzolovesbacon/kafka-native-client"
+keywords = ["kafka", "streaming", "async", "producer", "consumer"]
+categories = ["network-programming"]
+exclude = ["java-sources/**", "docs/**"]
+
+[dependencies]
+proto-kafka = "0.18.1"
+tokio = { version = "1", features = ["full"] }
+bytes = "1"
+thiserror = "2"
+dashmap = "6"
+tracing = "0.1"
+uuid = { version = "1", features = ["v4"] }
+indexmap = "2"
