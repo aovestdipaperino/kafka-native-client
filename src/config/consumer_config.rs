@@ -227,8 +227,7 @@ impl TryFrom<HashMap<String, String>> for ConsumerConfig {
                     builder = builder.client_id(value.clone());
                 }
                 "auto.offset.reset" => {
-                    let strategy =
-                        OffsetResetStrategy::parse(value).map_err(KafkaError::Config)?;
+                    let strategy = OffsetResetStrategy::parse(value).map_err(KafkaError::Config)?;
                     builder = builder.auto_offset_reset(strategy);
                 }
                 "enable.auto.commit" => {

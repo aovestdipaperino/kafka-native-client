@@ -85,9 +85,10 @@ impl Fetcher {
         let mut by_broker: HashMap<i32, Vec<(&TopicPartition, i64)>> = HashMap::new();
         for tp in &fetchable {
             if let Some(leader) = cluster.leader_for(tp)
-                && let Some(position) = self.subscription_state.position(tp) {
-                    by_broker.entry(leader.id).or_default().push((tp, position));
-                }
+                && let Some(position) = self.subscription_state.position(tp)
+            {
+                by_broker.entry(leader.id).or_default().push((tp, position));
+            }
         }
 
         let mut fetch_count = 0;

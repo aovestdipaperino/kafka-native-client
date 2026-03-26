@@ -104,9 +104,9 @@ impl Sender {
                     .connection_manager
                     .ensure_connection(broker_id, &addr)
                     .await
-                {
-                    tracing::warn!("Failed to connect to broker {broker_id}: {e}");
-                }
+            {
+                tracing::warn!("Failed to connect to broker {broker_id}: {e}");
+            }
         }
 
         // Drain ready batches grouped by broker

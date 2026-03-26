@@ -108,17 +108,18 @@ impl KafkaConsumer {
 
         // Replace coordinator with one that has the listener
         if listener.is_some()
-            && let Some(group_id) = &self.config.group_id {
-                self.group_coordinator = Some(GroupCoordinator::new(
-                    self.connection_manager.clone(),
-                    group_id.clone(),
-                    self.config.session_timeout_ms as u64,
-                    self.config.heartbeat_interval_ms as u64,
-                    300_000,
-                    None,
-                    listener,
-                ));
-            }
+            && let Some(group_id) = &self.config.group_id
+        {
+            self.group_coordinator = Some(GroupCoordinator::new(
+                self.connection_manager.clone(),
+                group_id.clone(),
+                self.config.session_timeout_ms as u64,
+                self.config.heartbeat_interval_ms as u64,
+                300_000,
+                None,
+                listener,
+            ));
+        }
 
         Ok(())
     }
@@ -147,25 +148,26 @@ impl KafkaConsumer {
 
         // Group coordination: join/rejoin if needed
         if let Some(coordinator) = &self.group_coordinator
-            && coordinator.needs_rejoin() {
-                let assigned = coordinator.join_group(&self.subscription_state).await?;
-                self.subscription_state.assign_from_group(&assigned);
+            && coordinator.needs_rejoin()
+        {
+            let assigned = coordinator.join_group(&self.subscription_state).await?;
+            self.subscription_state.assign_from_group(&assigned);
 
-                // Fetch committed offsets for new assignment
-                let committed = coordinator.fetch_committed_offsets(&assigned).await?;
-                for (tp, oam) in &committed {
-                    self.subscription_state.set_position(tp, oam.offset);
-                    self.subscription_state.set_committed(tp, oam.clone());
-                }
+            // Fetch committed offsets for new assignment
+            let committed = coordinator.fetch_committed_offsets(&assigned).await?;
+            for (tp, oam) in &committed {
+                self.subscription_state.set_position(tp, oam.offset);
+                self.subscription_state.set_committed(tp, oam.clone());
+            }
 
-                // For partitions with no committed offset, apply reset strategy
-                for tp in &assigned {
-                    if self.subscription_state.position(tp).is_none() {
-                        // Default to offset 0 for earliest, or will be handled by broker
-                        self.subscription_state.set_position(tp, 0);
-                    }
+            // For partitions with no committed offset, apply reset strategy
+            for tp in &assigned {
+                if self.subscription_state.position(tp).is_none() {
+                    // Default to offset 0 for earliest, or will be handled by broker
+                    self.subscription_state.set_position(tp, 0);
                 }
             }
+        }
 
         // Auto-commit if enabled
         if self.config.enable_auto_commit {
@@ -331,10 +333,9 @@ impl KafkaConsumer {
             (now - *last) >= self.config.auto_commit_interval_ms as i64
         };
 
-        if should_commit
-            && let Ok(()) = self.commit_sync().await {
-                *self.last_auto_commit_ms.lock().unwrap() = now;
-            }
+        if should_commit && let Ok(()) = self.commit_sync().await {
+            *self.last_auto_commit_ms.lock().unwrap() = now;
+        }
     }
 
     fn current_offsets(&self) -> HashMap<TopicPartition, OffsetAndMetadata> {

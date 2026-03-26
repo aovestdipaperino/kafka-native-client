@@ -205,9 +205,10 @@ impl RecordAccumulator {
             let size_ready = batch.size_bytes >= self.batch_size;
             let time_ready = (now - batch.created_ms) as u64 >= self.linger_ms;
             if (size_ready || time_ready)
-                && let Some(leader) = cluster.leader_for(tp) {
-                    ready_nodes.insert(leader.id);
-                }
+                && let Some(leader) = cluster.leader_for(tp)
+            {
+                ready_nodes.insert(leader.id);
+            }
         }
 
         ready_nodes
@@ -233,10 +234,11 @@ impl RecordAccumulator {
                 let time_ready = (now - batch.created_ms) as u64 >= self.linger_ms;
                 if (size_ready || time_ready)
                     && let Some(leader) = cluster.leader_for(&tp)
-                        && ready_nodes.contains(&leader.id) {
-                            let batch = batches.remove(&tp).unwrap();
-                            result.entry(leader.id).or_default().push(batch);
-                        }
+                    && ready_nodes.contains(&leader.id)
+                {
+                    let batch = batches.remove(&tp).unwrap();
+                    result.entry(leader.id).or_default().push(batch);
+                }
             }
         }
 
